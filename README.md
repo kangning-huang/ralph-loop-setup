@@ -14,6 +14,44 @@ The Ralph Wiggum Loop reads tasks from a JSON todo list and iteratively runs Cla
 4. Tracks progress and learns from failures
 5. Retries failed tasks (up to 5 times) before moving on
 
+---
+
+## Why Use Ralph Loop?
+
+### The Problem with One Giant Session
+
+When you ask Claude to complete a large project in a single session, you run into problems:
+
+- **Context window fills up**: As the conversation grows, Claude's context window gets cluttered with old messages, failed attempts, and irrelevant information
+- **Degraded performance**: Claude becomes less focused and effective as context bloats
+- **No recovery from failures**: If Claude gets stuck or makes mistakes, the entire session is compromised
+- **Lost progress on crashes**: If the session crashes, you lose everything
+
+### The Solution: Fresh Context + External Memory
+
+Ralph Loop solves this by running **each task in a fresh Claude Code session**:
+
+**Fresh Context Window**: Each task gets a brand new Claude instance with a clean context. Claude starts fresh, focused only on the current task with clear instructions. No accumulated confusion from previous work.
+
+**External Memory System**: Two files persist information between sessions:
+
+| File | Purpose |
+|------|---------|
+| `todolist.json` | **Task State Memory** - Tracks which tasks are pending, passed, or failed. Stores dependencies, priorities, and notes. Claude updates this after each task. |
+| `progress.txt` | **Learning Memory** - Logs what happened in each session: what worked, what failed, and lessons learned. Future sessions can learn from past mistakes. |
+
+**Orchestration Script**: `ralph_wiggum_loop.sh` ties it together - it reads the external memory, launches focused Claude sessions, and ensures continuity across the entire project.
+
+### Benefits
+
+- **Consistent quality**: Each task gets Claude's full attention with clean context
+- **Automatic recovery**: Failed tasks are retried with lessons from previous attempts
+- **Progress persistence**: Work is saved after each task, not lost on crashes
+- **Scalable**: Can handle projects with dozens or hundreds of tasks
+- **Hands-off**: Run overnight and wake up to a completed project
+
+---
+
 ## Installation
 
 ```bash
