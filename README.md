@@ -105,6 +105,15 @@ curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/
     └── progress-template.txt
 ```
 
+The installer also registers the plugin in `~/.claude/settings.json`:
+```json
+{
+  "enabledPlugins": {
+    "ralph-loop-setup": true
+  }
+}
+```
+
 **Gemini CLI** (skills structure):
 ```
 ~/.gemini/skills/ralph-loop-setup/
@@ -120,7 +129,7 @@ curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/
 - **AI Coding CLI** - One of:
   - Claude Code CLI from [claude.ai/code](https://claude.ai/code)
   - Gemini CLI from Google
-- **jq** - JSON processor (`brew install jq` on macOS)
+- **jq** (optional but recommended) - JSON processor for settings.json updates (`brew install jq` on macOS)
 
 ---
 

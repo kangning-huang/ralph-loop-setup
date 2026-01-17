@@ -96,6 +96,55 @@ detect_platforms() {
     fi
 }
 
+# Register plugin in Claude Code settings.json
+register_claude_plugin() {
+    local settings_file="$HOME/.claude/settings.json"
+    local plugin_name="ralph-loop-setup"
+
+    # Ensure .claude directory exists
+    mkdir -p "$HOME/.claude"
+
+    # Check if jq is available
+    if command -v jq &> /dev/null; then
+        if [ -f "$settings_file" ]; then
+            # File exists - add plugin to enabledPlugins
+            local tmp_file=$(mktemp)
+            jq --arg plugin "$plugin_name" '.enabledPlugins[$plugin] = true' "$settings_file" > "$tmp_file" && mv "$tmp_file" "$settings_file"
+        else
+            # File doesn't exist - create it
+            echo "{\"enabledPlugins\":{\"$plugin_name\":true}}" | jq '.' > "$settings_file"
+        fi
+        echo "  Registered plugin in: $settings_file"
+    else
+        # Fallback without jq - simple file creation/update
+        if [ ! -f "$settings_file" ]; then
+            # Create new settings file
+            cat > "$settings_file" << 'SETTINGS_EOF'
+{
+  "enabledPlugins": {
+    "ralph-loop-setup": true
+  }
+}
+SETTINGS_EOF
+            echo "  Created settings file: $settings_file"
+        elif grep -q '"enabledPlugins"' "$settings_file"; then
+            # enabledPlugins exists - check if plugin already registered
+            if ! grep -q '"ralph-loop-setup"' "$settings_file"; then
+                # Add plugin to existing enabledPlugins (simple sed approach)
+                sed -i.bak 's/"enabledPlugins"[[:space:]]*:[[:space:]]*{/"enabledPlugins": { "ralph-loop-setup": true,/' "$settings_file"
+                rm -f "$settings_file.bak"
+                echo "  Added plugin to: $settings_file"
+            else
+                echo "  Plugin already registered in: $settings_file"
+            fi
+        else
+            echo -e "${YELLOW}  Warning: Could not auto-register plugin. Please install jq or manually add to settings.json${NC}"
+            echo "  Add this to ~/.claude/settings.json:"
+            echo '  {"enabledPlugins": {"ralph-loop-setup": true}}'
+        fi
+    fi
+}
+
 # Install for Claude Code
 install_claude() {
     echo -e "${GREEN}Installing for Claude Code...${NC}"
@@ -130,6 +179,9 @@ install_claude() {
 
     # Make script executable
     chmod +x "$plugin_dir/resources/ralph_wiggum_loop.sh"
+
+    # Register the plugin in settings.json
+    register_claude_plugin
 
     echo "  Plugin installed at: $plugin_dir"
     echo "  Command: /ralph-loop-setup"
