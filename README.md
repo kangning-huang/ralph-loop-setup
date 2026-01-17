@@ -16,10 +16,9 @@ The Ralph Wiggum Loop reads tasks from a JSON todo list and iteratively runs Cla
 
 ## Installation
 
-Copy the skill file to your Claude Code skills folder:
-
 ```bash
-cp skill/ralph-loop.md ~/.claude/skills/
+# Download the skill to your Claude Code skills folder
+curl -o ~/.claude/skills/ralph-loop.md https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/skill/ralph-loop.md
 ```
 
 That's it! The `/ralph-loop` command is now available in Claude Code.
