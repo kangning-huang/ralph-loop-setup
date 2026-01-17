@@ -1,5 +1,6 @@
 {
   "name": "ralph-loop-setup",
   "version": "1.0.0",
-  "description": "Set up automated task implementation system with Ralph Wiggum Loop"
+  "description": "Set up automated task implementation system with Ralph Wiggum Loop",
+  "commands": ["ralph-loop-setup"]
 }
