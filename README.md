@@ -54,16 +54,16 @@ Ralph Loop solves this by running **each task in a fresh Claude Code session**:
 
 ## Installation
 
-Install directly through Claude Code:
+Install through Claude Code in two steps:
 
+**Step 1: Add the marketplace**
 ```
-/install-plugin https://github.com/kangning-huang/ralph-loop-setup
+/plugin marketplace add kangning-huang/ralph-loop-setup
 ```
 
-Or via CLI:
-
-```bash
-claude /install-plugin https://github.com/kangning-huang/ralph-loop-setup
+**Step 2: Install the plugin**
+```
+/plugin install ralph-loop-setup@kangning-huang-ralph-loop-setup
 ```
 
 ### Prerequisites
