@@ -63,7 +63,7 @@ Install through Claude Code in two steps:
 
 **Step 2: Install the plugin**
 ```
-/plugin install ralph-loop-setup@kangning-huang-ralph-loop-setup
+/plugin install ralph-loop-setup@ralph-loop-setup
 ```
 
 ### Prerequisites
