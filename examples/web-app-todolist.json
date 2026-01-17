@@ -1,0 +1,319 @@
+{
+  "metadata": {
+    "project": "TaskManager",
+    "version": "1.0.0",
+    "created": "2026-01-17",
+    "last_updated": "2026-01-17",
+    "description": "A simple task management web application with user authentication",
+    "build_command": "npm run build",
+    "test_command": "npm test",
+    "extra_instructions": "Use React for the frontend, Express for the backend, and PostgreSQL for the database. Follow REST API conventions."
+  },
+  "priority_guidelines": {
+    "description": "Priority is determined by: 1) Setup/infrastructure first, 2) Backend before frontend, 3) Core features before enhancements",
+    "scale": "1-10 where 1 is highest priority"
+  },
+  "tasks": [
+    {
+      "id": "SETUP-001",
+      "name": "Initialize project structure",
+      "description": "Create the basic project structure with separate frontend and backend directories, package.json files, and basic configuration.",
+      "category": "setup",
+      "priority": 1,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": [],
+      "acceptance_criteria": [
+        "Project has /frontend and /backend directories",
+        "Both directories have package.json with appropriate dependencies",
+        "ESLint and Prettier are configured",
+        "Basic scripts (dev, build, test) work"
+      ],
+      "files_likely_affected": [
+        "package.json",
+        "frontend/package.json",
+        "backend/package.json",
+        ".eslintrc.js",
+        ".prettierrc"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "SETUP-002",
+      "name": "Set up database schema",
+      "description": "Create PostgreSQL database schema with users and tasks tables, including migrations.",
+      "category": "setup",
+      "priority": 1,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["SETUP-001"],
+      "acceptance_criteria": [
+        "Users table with id, email, password_hash, created_at",
+        "Tasks table with id, user_id, title, description, status, due_date, created_at",
+        "Foreign key relationship between tasks and users",
+        "Migration files created and tested"
+      ],
+      "files_likely_affected": [
+        "backend/migrations/001_create_users.sql",
+        "backend/migrations/002_create_tasks.sql",
+        "backend/src/db/schema.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "AUTH-001",
+      "name": "Implement user registration endpoint",
+      "description": "Create POST /api/auth/register endpoint that accepts email and password, validates input, hashes password, and creates user in database.",
+      "category": "auth",
+      "priority": 2,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["SETUP-002"],
+      "acceptance_criteria": [
+        "POST /api/auth/register accepts {email, password}",
+        "Email format is validated",
+        "Password is hashed with bcrypt before storage",
+        "Returns 201 with user data (no password) on success",
+        "Returns 400 for invalid input",
+        "Returns 409 if email already exists",
+        "Unit tests pass"
+      ],
+      "files_likely_affected": [
+        "backend/src/routes/auth.ts",
+        "backend/src/controllers/authController.ts",
+        "backend/src/models/User.ts",
+        "backend/tests/auth.test.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "AUTH-002",
+      "name": "Implement user login endpoint",
+      "description": "Create POST /api/auth/login endpoint that validates credentials and returns JWT token.",
+      "category": "auth",
+      "priority": 2,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["AUTH-001"],
+      "acceptance_criteria": [
+        "POST /api/auth/login accepts {email, password}",
+        "Compares password with stored hash",
+        "Returns JWT token on success",
+        "Token expires in 24 hours",
+        "Returns 401 for invalid credentials",
+        "Unit tests pass"
+      ],
+      "files_likely_affected": [
+        "backend/src/routes/auth.ts",
+        "backend/src/controllers/authController.ts",
+        "backend/src/utils/jwt.ts",
+        "backend/tests/auth.test.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "AUTH-003",
+      "name": "Create authentication middleware",
+      "description": "Create middleware that validates JWT token and attaches user to request object.",
+      "category": "auth",
+      "priority": 2,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["AUTH-002"],
+      "acceptance_criteria": [
+        "Middleware extracts token from Authorization header",
+        "Validates token signature and expiration",
+        "Attaches user object to req.user",
+        "Returns 401 if token is missing or invalid",
+        "Can be applied to protected routes",
+        "Unit tests pass"
+      ],
+      "files_likely_affected": [
+        "backend/src/middleware/auth.ts",
+        "backend/tests/middleware/auth.test.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "API-001",
+      "name": "Implement CRUD endpoints for tasks",
+      "description": "Create RESTful API endpoints for creating, reading, updating, and deleting tasks. All endpoints require authentication.",
+      "category": "api",
+      "priority": 3,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["AUTH-003"],
+      "acceptance_criteria": [
+        "GET /api/tasks returns user's tasks",
+        "GET /api/tasks/:id returns single task",
+        "POST /api/tasks creates new task",
+        "PUT /api/tasks/:id updates task",
+        "DELETE /api/tasks/:id deletes task",
+        "Users can only access their own tasks",
+        "Input validation on all endpoints",
+        "Unit tests pass"
+      ],
+      "files_likely_affected": [
+        "backend/src/routes/tasks.ts",
+        "backend/src/controllers/taskController.ts",
+        "backend/src/models/Task.ts",
+        "backend/tests/tasks.test.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "API-002",
+      "name": "Add task filtering and sorting",
+      "description": "Extend GET /api/tasks to support filtering by status and due_date, and sorting by various fields.",
+      "category": "api",
+      "priority": 4,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["API-001"],
+      "acceptance_criteria": [
+        "Filter by status: ?status=pending|completed|all",
+        "Filter by due date: ?due_before=date&due_after=date",
+        "Sort by: ?sort=created_at|due_date|title&order=asc|desc",
+        "Pagination: ?page=1&limit=20",
+        "Returns total count for pagination",
+        "Unit tests pass"
+      ],
+      "files_likely_affected": [
+        "backend/src/controllers/taskController.ts",
+        "backend/tests/tasks.test.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "UI-001",
+      "name": "Create login and registration pages",
+      "description": "Build React components for user login and registration with form validation.",
+      "category": "ui",
+      "priority": 5,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["AUTH-002"],
+      "acceptance_criteria": [
+        "Login page with email and password fields",
+        "Registration page with email, password, and confirm password",
+        "Client-side validation with error messages",
+        "Calls appropriate API endpoints",
+        "Stores JWT token in localStorage on success",
+        "Redirects to dashboard after auth",
+        "Shows loading state during API calls"
+      ],
+      "files_likely_affected": [
+        "frontend/src/pages/Login.tsx",
+        "frontend/src/pages/Register.tsx",
+        "frontend/src/components/AuthForm.tsx",
+        "frontend/src/hooks/useAuth.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "UI-002",
+      "name": "Create task list dashboard",
+      "description": "Build the main dashboard showing user's tasks with ability to filter, sort, and paginate.",
+      "category": "ui",
+      "priority": 5,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["API-001", "UI-001"],
+      "acceptance_criteria": [
+        "Displays list of user's tasks",
+        "Shows task title, status, and due date",
+        "Filter dropdown for status",
+        "Sort dropdown for different fields",
+        "Pagination controls",
+        "Loading and empty states",
+        "Protected route (redirects to login if not authenticated)"
+      ],
+      "files_likely_affected": [
+        "frontend/src/pages/Dashboard.tsx",
+        "frontend/src/components/TaskList.tsx",
+        "frontend/src/components/TaskCard.tsx",
+        "frontend/src/hooks/useTasks.ts"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "UI-003",
+      "name": "Create task create/edit form",
+      "description": "Build modal or page for creating and editing tasks with all fields.",
+      "category": "ui",
+      "priority": 5,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["UI-002"],
+      "acceptance_criteria": [
+        "Form with title, description, status, and due date fields",
+        "Works for both create and edit modes",
+        "Client-side validation",
+        "Date picker for due date",
+        "Submits to appropriate API endpoint",
+        "Shows success/error feedback",
+        "Refreshes task list after save"
+      ],
+      "files_likely_affected": [
+        "frontend/src/components/TaskForm.tsx",
+        "frontend/src/components/TaskModal.tsx"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "UI-004",
+      "name": "Add task delete confirmation",
+      "description": "Add delete button with confirmation dialog to prevent accidental deletions.",
+      "category": "ui",
+      "priority": 6,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["UI-002"],
+      "acceptance_criteria": [
+        "Delete button on each task card",
+        "Confirmation dialog before deletion",
+        "Shows loading state during deletion",
+        "Shows success/error feedback",
+        "Refreshes task list after deletion"
+      ],
+      "files_likely_affected": [
+        "frontend/src/components/TaskCard.tsx",
+        "frontend/src/components/ConfirmDialog.tsx"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "TEST-001",
+      "name": "Add end-to-end tests",
+      "description": "Create Playwright or Cypress tests for critical user flows.",
+      "category": "testing",
+      "priority": 7,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["UI-003", "UI-004"],
+      "acceptance_criteria": [
+        "Test user registration flow",
+        "Test user login flow",
+        "Test creating a new task",
+        "Test editing an existing task",
+        "Test deleting a task",
+        "Test filtering and sorting tasks",
+        "All tests pass in CI"
+      ],
+      "files_likely_affected": [
+        "e2e/auth.spec.ts",
+        "e2e/tasks.spec.ts",
+        "playwright.config.ts"
+      ],
+      "notes": ""
+    }
+  ],
+  "statistics": {
+    "total_tasks": 12,
+    "pending": 12,
+    "in_progress": 0,
+    "passed": 0,
+    "failed": 0,
+    "skipped": 0
+  }
+}

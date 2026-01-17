@@ -1,0 +1,16 @@
+# Temporary files generated during execution
+.claude_prompt.md
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Editor files
+*.swp
+*.swo
+*~
+.idea/
+.vscode/
+
+# Logs (keep progress.txt template, ignore user-generated logs in other locations)
+*.log
