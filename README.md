@@ -55,10 +55,10 @@ Ralph Loop solves this by running **each task in a fresh Claude Code session**:
 ## Installation
 
 ```bash
-curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/install.sh | bash
+curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup-setup/main/install.sh | bash
 ```
 
-This installs the skill and all resources to `~/.claude/skills/`. The `/ralph-loop` command is now available in Claude Code.
+This installs the skill and all resources to `~/.claude/skills/`. The `/ralph-loop-setup` command is now available in Claude Code.
 
 ### Prerequisites
 
@@ -74,7 +74,7 @@ This installs the skill and all resources to `~/.claude/skills/`. The `/ralph-lo
 In Claude Code, type:
 
 ```
-/ralph-loop
+/ralph-loop-setup
 ```
 
 The skill will guide you through creating a todo list:
@@ -178,10 +178,10 @@ See `examples/web-app-todolist.json` for a complete example.
 | File | Description |
 |------|-------------|
 | `install.sh` | One-line installer script |
-| `skill/ralph-loop.skill` | Claude Code skill |
-| `skill/resources/ralph_wiggum_loop.sh` | Main automation script |
-| `skill/resources/todolist-template.json` | Template todo list |
-| `skill/resources/progress-template.txt` | Template progress log |
+| `skill/ralph-loop-setup.skill` | Claude Code skill |
+| `skill/ralph-loop-setup/resources/ralph_wiggum_loop.sh` | Main automation script |
+| `skill/ralph-loop-setup/resources/todolist-template.json` | Template todo list |
+| `skill/ralph-loop-setup/resources/progress-template.txt` | Template progress log |
 | `examples/` | Example todo lists |
 
 ---
