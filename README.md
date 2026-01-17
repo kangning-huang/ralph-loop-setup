@@ -17,11 +17,10 @@ The Ralph Wiggum Loop reads tasks from a JSON todo list and iteratively runs Cla
 ## Installation
 
 ```bash
-# Download the skill to your Claude Code skills folder
-curl -o ~/.claude/skills/ralph-loop.md https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/skill/ralph-loop.md
+cd ~/.claude/skills && curl -O https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/skill/ralph-loop.skill
 ```
 
-That's it! The `/ralph-loop` command is now available in Claude Code.
+The `/ralph-loop` command is now available in Claude Code.
 
 ### Prerequisites
 
@@ -140,7 +139,7 @@ See `examples/web-app-todolist.json` for a complete example.
 
 | File | Description |
 |------|-------------|
-| `skill/ralph-loop.md` | Claude Code skill (copy to `~/.claude/skills/`) |
+| `skill/ralph-loop.skill` | Claude Code skill |
 | `ralph_wiggum_loop.sh` | Main automation script |
 | `todolist.json` | Template todo list |
 | `examples/` | Example todo lists |
