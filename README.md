@@ -54,15 +54,54 @@ Ralph Loop solves this by running **each task in a fresh Claude Code session**:
 
 ## Installation
 
+The Ralph Loop Setup skill supports multiple AI coding platforms that implement the Agent Skills open standard.
+
+### Supported Platforms
+
+| Platform | Skill Directory | Status |
+|----------|-----------------|--------|
+| Claude Code | `~/.claude/skills/` | Supported |
+| Gemini CLI | `~/.gemini/skills/` | Supported |
+| Cursor | Agent Skills (auto-discovery) | Compatible |
+| Codex/OpenCode | Agent Skills standard | Compatible |
+
+### Quick Install (Auto-detect)
+
 ```bash
-curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup-setup/main/install.sh | bash
+curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/install.sh | bash
 ```
 
-This installs the skill and all resources to `~/.claude/skills/`. The `/ralph-loop-setup` command is now available in Claude Code.
+This auto-detects installed platforms and installs the skill for all of them.
+
+### Platform-Specific Install
+
+**Claude Code only:**
+```bash
+curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/install.sh | bash -s -- --claude
+```
+
+**Gemini CLI only:**
+```bash
+curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/install.sh | bash -s -- --gemini
+```
+
+**All platforms (regardless of detection):**
+```bash
+curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/install.sh | bash -s -- --all
+```
+
+### What Gets Installed
+
+| Platform | Skill File | Resources |
+|----------|------------|-----------|
+| Claude Code | `~/.claude/skills/ralph-loop-setup.skill` | `~/.claude/skills/ralph-loop-setup/resources/` |
+| Gemini CLI | `~/.gemini/skills/ralph-loop-setup/SKILL.md` | `~/.gemini/skills/ralph-loop-setup/resources/` |
 
 ### Prerequisites
 
-- **Claude Code CLI** - Install from [claude.ai/code](https://claude.ai/code)
+- **AI Coding CLI** - One of:
+  - Claude Code CLI from [claude.ai/code](https://claude.ai/code)
+  - Gemini CLI from Google
 - **jq** - JSON processor (`brew install jq` on macOS)
 
 ---
@@ -177,8 +216,9 @@ See `examples/web-app-todolist.json` for a complete example.
 
 | File | Description |
 |------|-------------|
-| `install.sh` | One-line installer script |
-| `skill/ralph-loop-setup.skill` | Claude Code skill |
+| `install.sh` | Multi-platform installer script |
+| `skill/ralph-loop-setup.skill` | Claude Code skill file |
+| `skill/SKILL.md` | Gemini CLI skill file |
 | `skill/ralph-loop-setup/resources/ralph_wiggum_loop.sh` | Main automation script |
 | `skill/ralph-loop-setup/resources/todolist-template.json` | Template todo list |
 | `skill/ralph-loop-setup/resources/progress-template.txt` | Template progress log |
