@@ -2,9 +2,18 @@
 
 You are helping the user set up a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to work through a project todo list.
 
+## Resources Location
+
+This skill comes with resource files installed at:
+- `~/.claude/skills/ralph-loop/resources/ralph_wiggum_loop.sh` - The main loop script
+- `~/.claude/skills/ralph-loop/resources/todolist-template.json` - Template for todo list
+- `~/.claude/skills/ralph-loop/resources/progress-template.txt` - Template for progress log
+
+You will copy these resources to the user's project directory and customize them.
+
 ## What You Will Create
 
-The Ralph Wiggum Loop requires 3 files:
+The Ralph Wiggum Loop requires 3 files in the user's project:
 
 1. **todolist.json** - Task State Memory: tracks tasks, priorities, dependencies, and status
 2. **progress.txt** - Learning Memory: logs what happened in each session for future reference
@@ -74,11 +83,17 @@ Ask the user where they want to set up the Ralph Loop files. Default to the curr
 
 ### Step 4: Create All 3 Files
 
-You MUST create all 3 files for the Ralph Loop to work:
+#### File 1: Copy and customize ralph_wiggum_loop.sh
 
-#### File 1: todolist.json
+Copy the script from the resources:
+```bash
+cp ~/.claude/skills/ralph-loop/resources/ralph_wiggum_loop.sh ./ralph_wiggum_loop.sh
+chmod +x ./ralph_wiggum_loop.sh
+```
 
-Create this file with the following structure (fill in based on user's project):
+#### File 2: Create todolist.json
+
+Read the template from `~/.claude/skills/ralph-loop/resources/todolist-template.json` for reference, then create a customized version with the user's tasks:
 
 ```json
 {
@@ -117,8 +132,8 @@ Create this file with the following structure (fill in based on user's project):
     }
   ],
   "statistics": {
-    "total_tasks": 0,
-    "pending": 0,
+    "total_tasks": N,
+    "pending": N,
     "in_progress": 0,
     "passed": 0,
     "failed": 0
@@ -136,9 +151,9 @@ Create this file with the following structure (fill in based on user's project):
 - `TEST-XXX` - Testing
 - `DOC-XXX` - Documentation
 
-#### File 2: progress.txt
+#### File 3: Create progress.txt
 
-Create this file with the following header:
+Create the progress log file:
 
 ```
 # PROJECT_NAME - Task Implementation Progress Log
@@ -151,16 +166,6 @@ Create this file with the following header:
 
 ================================================================================
 ```
-
-#### File 3: ralph_wiggum_loop.sh
-
-Download the script from GitHub using this command:
-
-```bash
-curl -O https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/ralph_wiggum_loop.sh && chmod +x ralph_wiggum_loop.sh
-```
-
-Run this command in the user's project directory to download the script.
 
 ### Step 5: Verify Setup and Provide Instructions
 
@@ -209,4 +214,3 @@ When creating tasks, advise users to:
 - Make sure dependencies form a valid DAG (no circular dependencies)
 - Statistics should accurately reflect the task counts
 - Use today's date for created/last_updated fields
-- MUST download the shell script - the loop won't work without it

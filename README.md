@@ -55,10 +55,10 @@ Ralph Loop solves this by running **each task in a fresh Claude Code session**:
 ## Installation
 
 ```bash
-cd ~/.claude/skills && curl -O https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/skill/ralph-loop.skill
+curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/install.sh | bash
 ```
 
-The `/ralph-loop` command is now available in Claude Code.
+This installs the skill and all resources to `~/.claude/skills/`. The `/ralph-loop` command is now available in Claude Code.
 
 ### Prerequisites
 
@@ -177,9 +177,11 @@ See `examples/web-app-todolist.json` for a complete example.
 
 | File | Description |
 |------|-------------|
+| `install.sh` | One-line installer script |
 | `skill/ralph-loop.skill` | Claude Code skill |
-| `ralph_wiggum_loop.sh` | Main automation script |
-| `todolist.json` | Template todo list |
+| `skill/resources/ralph_wiggum_loop.sh` | Main automation script |
+| `skill/resources/todolist-template.json` | Template todo list |
+| `skill/resources/progress-template.txt` | Template progress log |
 | `examples/` | Example todo lists |
 
 ---
