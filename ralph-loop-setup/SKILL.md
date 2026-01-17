@@ -4,15 +4,6 @@ You are helping the user set up the 3 files needed to run a Ralph Wiggum Loop - 
 
 **Important**: This skill sets up the files. It does not run the loop itself. After setup, the user runs the loop separately.
 
-## Resources Location
-
-This skill comes with resource files installed at:
-- `~/.claude/plugins/local/ralph-loop-setup/resources/ralph_wiggum_loop.sh` - The main loop script
-- `~/.claude/plugins/local/ralph-loop-setup/resources/todolist-template.json` - Template for todo list
-- `~/.claude/plugins/local/ralph-loop-setup/resources/progress-template.txt` - Template for progress log
-
-You will copy these resources to the user's project directory and customize them.
-
 ## What You Will Create
 
 The Ralph Wiggum Loop requires 3 files in the user's project:
@@ -85,17 +76,17 @@ Ask the user where they want to set up the Ralph Loop files. Default to the curr
 
 ### Step 4: Create All 3 Files
 
-#### File 1: Copy and customize ralph_wiggum_loop.sh
+#### File 1: Create ralph_wiggum_loop.sh
 
-Copy the script from the resources:
-```bash
-cp ~/.claude/plugins/local/ralph-loop-setup/resources/ralph_wiggum_loop.sh ./ralph_wiggum_loop.sh
-chmod +x ./ralph_wiggum_loop.sh
-```
+Create the orchestration script. You can find the full script content in the reference directory, or create it with these key features:
+- Reads tasks from todolist.json
+- Runs Claude Code for each task
+- Updates progress.txt after each task
+- Handles timeouts and retries
 
 #### File 2: Create todolist.json
 
-Read the template from `~/.claude/plugins/local/ralph-loop-setup/resources/todolist-template.json` for reference, then create a customized version with the user's tasks:
+Create a customized version with the user's tasks:
 
 ```json
 {

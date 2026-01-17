@@ -1,0 +1,21 @@
+{
+  "name": "ralph-loop-setup",
+  "owner": {
+    "name": "Kangning Huang",
+    "email": "kh3657@nyu.edu"
+  },
+  "metadata": {
+    "description": "Set up automated task implementation system with Ralph Wiggum Loop",
+    "version": "1.0.0"
+  },
+  "plugins": [
+    {
+      "name": "ralph-loop-setup",
+      "description": "Set up Ralph Wiggum Loop for automated task implementation",
+      "source": "./",
+      "skills": [
+        "./ralph-loop-setup"
+      ]
+    }
+  ]
+}
