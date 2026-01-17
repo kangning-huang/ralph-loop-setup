@@ -96,51 +96,56 @@ detect_platforms() {
     fi
 }
 
-# Register plugin in Claude Code settings.json
+# Register plugin in Claude Code installed_plugins.json
 register_claude_plugin() {
-    local settings_file="$HOME/.claude/settings.json"
+    local installed_plugins_file="$HOME/.claude/installed_plugins.json"
     local plugin_name="ralph-loop-setup"
+    local plugin_path="$CLAUDE_PLUGIN_DIR"
 
     # Ensure .claude directory exists
     mkdir -p "$HOME/.claude"
 
+    # Plugin entry to add
+    local plugin_entry="{\"name\":\"$plugin_name\",\"path\":\"$plugin_path\",\"enabled\":true}"
+
     # Check if jq is available
     if command -v jq &> /dev/null; then
-        if [ -f "$settings_file" ]; then
-            # File exists - add plugin to enabledPlugins
-            local tmp_file=$(mktemp)
-            jq --arg plugin "$plugin_name" '.enabledPlugins[$plugin] = true' "$settings_file" > "$tmp_file" && mv "$tmp_file" "$settings_file"
-        else
-            # File doesn't exist - create it
-            echo "{\"enabledPlugins\":{\"$plugin_name\":true}}" | jq '.' > "$settings_file"
-        fi
-        echo "  Registered plugin in: $settings_file"
-    else
-        # Fallback without jq - simple file creation/update
-        if [ ! -f "$settings_file" ]; then
-            # Create new settings file
-            cat > "$settings_file" << 'SETTINGS_EOF'
-{
-  "enabledPlugins": {
-    "ralph-loop-setup": true
-  }
-}
-SETTINGS_EOF
-            echo "  Created settings file: $settings_file"
-        elif grep -q '"enabledPlugins"' "$settings_file"; then
-            # enabledPlugins exists - check if plugin already registered
-            if ! grep -q '"ralph-loop-setup"' "$settings_file"; then
-                # Add plugin to existing enabledPlugins (simple sed approach)
-                sed -i.bak 's/"enabledPlugins"[[:space:]]*:[[:space:]]*{/"enabledPlugins": { "ralph-loop-setup": true,/' "$settings_file"
-                rm -f "$settings_file.bak"
-                echo "  Added plugin to: $settings_file"
+        if [ -f "$installed_plugins_file" ]; then
+            # File exists - check if plugin already registered
+            if jq -e ".[] | select(.name == \"$plugin_name\")" "$installed_plugins_file" > /dev/null 2>&1; then
+                echo "  Plugin already registered in: $installed_plugins_file"
             else
-                echo "  Plugin already registered in: $settings_file"
+                # Add plugin to array
+                local tmp_file=$(mktemp)
+                jq --argjson entry "$plugin_entry" '. + [$entry]' "$installed_plugins_file" > "$tmp_file" && mv "$tmp_file" "$installed_plugins_file"
+                echo "  Registered plugin in: $installed_plugins_file"
             fi
         else
-            echo -e "${YELLOW}  Warning: Could not auto-register plugin. Please install jq or manually add to settings.json${NC}"
-            echo "  Add this to ~/.claude/settings.json:"
-            echo '  {"enabledPlugins": {"ralph-loop-setup": true}}'
+            # File doesn't exist - create it with the plugin
+            echo "[$plugin_entry]" | jq '.' > "$installed_plugins_file"
+            echo "  Created and registered in: $installed_plugins_file"
+        fi
+    else
+        # Fallback without jq
+        if [ ! -f "$installed_plugins_file" ]; then
+            # Create new file
+            cat > "$installed_plugins_file" << EOF
+[
+  {
+    "name": "$plugin_name",
+    "path": "$plugin_path",
+    "enabled": true
+  }
+]
+EOF
+            echo "  Created: $installed_plugins_file"
+        elif ! grep -q "\"$plugin_name\"" "$installed_plugins_file"; then
+            # File exists but plugin not registered - append before closing bracket
+            sed -i.bak 's/]$/,{"name":"'"$plugin_name"'","path":"'"$plugin_path"'","enabled":true}]/' "$installed_plugins_file"
+            rm -f "$installed_plugins_file.bak"
+            echo "  Registered plugin in: $installed_plugins_file"
+        else
+            echo "  Plugin already registered in: $installed_plugins_file"
         fi
     fi
 }

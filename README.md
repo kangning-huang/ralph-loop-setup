@@ -105,13 +105,15 @@ curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/
     └── progress-template.txt
 ```
 
-The installer also registers the plugin in `~/.claude/settings.json`:
+The installer also registers the plugin in `~/.claude/installed_plugins.json`:
 ```json
-{
-  "enabledPlugins": {
-    "ralph-loop-setup": true
+[
+  {
+    "name": "ralph-loop-setup",
+    "path": "~/.claude/plugins/local/ralph-loop-setup",
+    "enabled": true
   }
-}
+]
 ```
 
 **Gemini CLI** (skills structure):
