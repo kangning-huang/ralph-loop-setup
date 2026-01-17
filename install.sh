@@ -1,6 +1,6 @@
 #!/bin/bash
 
-# Ralph Loop Setup Skill Installer
+# Ralph Loop Setup Plugin Installer
 # Multi-platform installer for Claude Code, Gemini CLI, and other Agent Skills-compatible platforms
 
 set -e
@@ -14,7 +14,8 @@ YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
 # Platform configurations
-CLAUDE_SKILL_DIR="$HOME/.claude/skills"
+# Claude Code requires plugins to be in plugins/local/ directory
+CLAUDE_PLUGIN_DIR="$HOME/.claude/plugins/local/ralph-loop-setup"
 GEMINI_SKILL_DIR="$HOME/.gemini/skills"
 
 # Flags
@@ -26,7 +27,7 @@ AUTO_DETECT=true
 usage() {
     echo "Usage: $0 [OPTIONS]"
     echo ""
-    echo "Install Ralph Loop Setup skill for AI coding platforms."
+    echo "Install Ralph Loop Setup plugin for AI coding platforms."
     echo ""
     echo "Options:"
     echo "  --claude    Install for Claude Code only"
@@ -99,25 +100,39 @@ detect_platforms() {
 install_claude() {
     echo -e "${GREEN}Installing for Claude Code...${NC}"
 
-    local skill_dir="$CLAUDE_SKILL_DIR"
-    local ralph_dir="$skill_dir/ralph-loop-setup"
+    local plugin_dir="$CLAUDE_PLUGIN_DIR"
 
-    # Create directories
-    mkdir -p "$ralph_dir/resources"
+    # Create plugin directory structure
+    # ~/.claude/plugins/local/ralph-loop-setup/
+    # ├── .claude-plugin/
+    # │   └── plugin.json
+    # ├── commands/
+    # │   └── ralph-loop-setup.md
+    # └── resources/
+    #     ├── ralph_wiggum_loop.sh
+    #     ├── todolist-template.json
+    #     └── progress-template.txt
 
-    # Download skill file (.skill format for Claude)
-    curl -sL "$REPO_BASE/skill/ralph-loop-setup.skill" -o "$skill_dir/ralph-loop-setup.skill"
+    mkdir -p "$plugin_dir/.claude-plugin"
+    mkdir -p "$plugin_dir/commands"
+    mkdir -p "$plugin_dir/resources"
+
+    # Download plugin.json
+    curl -sL "$REPO_BASE/skill/.claude-plugin/plugin.json" -o "$plugin_dir/.claude-plugin/plugin.json"
+
+    # Download command file (the skill definition)
+    curl -sL "$REPO_BASE/skill/commands/ralph-loop-setup.md" -o "$plugin_dir/commands/ralph-loop-setup.md"
 
     # Download resources
-    curl -sL "$REPO_BASE/skill/ralph-loop-setup/resources/ralph_wiggum_loop.sh" -o "$ralph_dir/resources/ralph_wiggum_loop.sh"
-    curl -sL "$REPO_BASE/skill/ralph-loop-setup/resources/todolist-template.json" -o "$ralph_dir/resources/todolist-template.json"
-    curl -sL "$REPO_BASE/skill/ralph-loop-setup/resources/progress-template.txt" -o "$ralph_dir/resources/progress-template.txt"
+    curl -sL "$REPO_BASE/skill/ralph-loop-setup/resources/ralph_wiggum_loop.sh" -o "$plugin_dir/resources/ralph_wiggum_loop.sh"
+    curl -sL "$REPO_BASE/skill/ralph-loop-setup/resources/todolist-template.json" -o "$plugin_dir/resources/todolist-template.json"
+    curl -sL "$REPO_BASE/skill/ralph-loop-setup/resources/progress-template.txt" -o "$plugin_dir/resources/progress-template.txt"
 
     # Make script executable
-    chmod +x "$ralph_dir/resources/ralph_wiggum_loop.sh"
+    chmod +x "$plugin_dir/resources/ralph_wiggum_loop.sh"
 
-    echo "  Installed: $skill_dir/ralph-loop-setup.skill"
-    echo "  Resources: $ralph_dir/resources/"
+    echo "  Plugin installed at: $plugin_dir"
+    echo "  Command: /ralph-loop-setup"
 }
 
 # Install for Gemini CLI
@@ -147,8 +162,8 @@ install_gemini() {
 
 # Main installation logic
 main() {
-    echo "Ralph Loop Setup Skill Installer"
-    echo "================================="
+    echo "Ralph Loop Setup Plugin Installer"
+    echo "=================================="
     echo ""
 
     # Handle --all flag

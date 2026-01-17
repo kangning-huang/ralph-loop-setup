@@ -7,9 +7,9 @@ You are helping the user set up the 3 files needed to run a Ralph Wiggum Loop - 
 ## Resources Location
 
 This skill comes with resource files installed at:
-- `~/.claude/skills/ralph-loop-setup/resources/ralph_wiggum_loop.sh` - The main loop script
-- `~/.claude/skills/ralph-loop-setup/resources/todolist-template.json` - Template for todo list
-- `~/.claude/skills/ralph-loop-setup/resources/progress-template.txt` - Template for progress log
+- `~/.claude/plugins/local/ralph-loop-setup/resources/ralph_wiggum_loop.sh` - The main loop script
+- `~/.claude/plugins/local/ralph-loop-setup/resources/todolist-template.json` - Template for todo list
+- `~/.claude/plugins/local/ralph-loop-setup/resources/progress-template.txt` - Template for progress log
 
 You will copy these resources to the user's project directory and customize them.
 
@@ -89,13 +89,13 @@ Ask the user where they want to set up the Ralph Loop files. Default to the curr
 
 Copy the script from the resources:
 ```bash
-cp ~/.claude/skills/ralph-loop-setup/resources/ralph_wiggum_loop.sh ./ralph_wiggum_loop.sh
+cp ~/.claude/plugins/local/ralph-loop-setup/resources/ralph_wiggum_loop.sh ./ralph_wiggum_loop.sh
 chmod +x ./ralph_wiggum_loop.sh
 ```
 
 #### File 2: Create todolist.json
 
-Read the template from `~/.claude/skills/ralph-loop-setup/resources/todolist-template.json` for reference, then create a customized version with the user's tasks:
+Read the template from `~/.claude/plugins/local/ralph-loop-setup/resources/todolist-template.json` for reference, then create a customized version with the user's tasks:
 
 ```json
 {

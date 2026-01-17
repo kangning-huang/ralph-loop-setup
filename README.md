@@ -58,10 +58,10 @@ The Ralph Loop Setup skill supports multiple AI coding platforms that implement 
 
 ### Supported Platforms
 
-| Platform | Skill Directory | Status |
-|----------|-----------------|--------|
-| Claude Code | `~/.claude/skills/` | Supported |
-| Gemini CLI | `~/.gemini/skills/` | Supported |
+| Platform | Installation Location | Status |
+|----------|----------------------|--------|
+| Claude Code | `~/.claude/plugins/local/ralph-loop-setup/` | Supported |
+| Gemini CLI | `~/.gemini/skills/ralph-loop-setup/` | Supported |
 | Cursor | Agent Skills (auto-discovery) | Compatible |
 | Codex/OpenCode | Agent Skills standard | Compatible |
 
@@ -92,10 +92,28 @@ curl -sL https://raw.githubusercontent.com/kangning-huang/ralph-loop-setup/main/
 
 ### What Gets Installed
 
-| Platform | Skill File | Resources |
-|----------|------------|-----------|
-| Claude Code | `~/.claude/skills/ralph-loop-setup.skill` | `~/.claude/skills/ralph-loop-setup/resources/` |
-| Gemini CLI | `~/.gemini/skills/ralph-loop-setup/SKILL.md` | `~/.gemini/skills/ralph-loop-setup/resources/` |
+**Claude Code** (plugin structure):
+```
+~/.claude/plugins/local/ralph-loop-setup/
+├── .claude-plugin/
+│   └── plugin.json
+├── commands/
+│   └── ralph-loop-setup.md
+└── resources/
+    ├── ralph_wiggum_loop.sh
+    ├── todolist-template.json
+    └── progress-template.txt
+```
+
+**Gemini CLI** (skills structure):
+```
+~/.gemini/skills/ralph-loop-setup/
+├── SKILL.md
+└── resources/
+    ├── ralph_wiggum_loop.sh
+    ├── todolist-template.json
+    └── progress-template.txt
+```
 
 ### Prerequisites
 
@@ -217,7 +235,8 @@ See `examples/web-app-todolist.json` for a complete example.
 | File | Description |
 |------|-------------|
 | `install.sh` | Multi-platform installer script |
-| `skill/ralph-loop-setup.skill` | Claude Code skill file |
+| `skill/.claude-plugin/plugin.json` | Claude Code plugin manifest |
+| `skill/commands/ralph-loop-setup.md` | Claude Code command definition |
 | `skill/SKILL.md` | Gemini CLI skill file |
 | `skill/ralph-loop-setup/resources/ralph_wiggum_loop.sh` | Main automation script |
 | `skill/ralph-loop-setup/resources/todolist-template.json` | Template todo list |
