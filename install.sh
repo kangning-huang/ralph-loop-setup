@@ -98,55 +98,56 @@ detect_platforms() {
 
 # Register plugin in Claude Code installed_plugins.json
 register_claude_plugin() {
-    local installed_plugins_file="$HOME/.claude/installed_plugins.json"
-    local plugin_name="ralph-loop-setup"
+    local installed_plugins_file="$HOME/.claude/plugins/installed_plugins.json"
+    local plugin_key="ralph-loop-setup@local"
     local plugin_path="$CLAUDE_PLUGIN_DIR"
+    local timestamp=$(date -u +"%Y-%m-%dT%H:%M:%S.000Z")
 
-    # Ensure .claude directory exists
-    mkdir -p "$HOME/.claude"
+    # Ensure .claude/plugins directory exists
+    mkdir -p "$HOME/.claude/plugins"
 
-    # Plugin entry to add
-    local plugin_entry="{\"name\":\"$plugin_name\",\"path\":\"$plugin_path\",\"enabled\":true}"
+    # Check if jq is available (required for this format)
+    if ! command -v jq &> /dev/null; then
+        echo -e "${YELLOW}  Warning: jq is required to register the plugin. Please install jq:${NC}"
+        echo "    brew install jq  (macOS)"
+        echo "    apt install jq   (Ubuntu/Debian)"
+        echo "  Then re-run this installer."
+        return 1
+    fi
 
-    # Check if jq is available
-    if command -v jq &> /dev/null; then
-        if [ -f "$installed_plugins_file" ]; then
-            # File exists - check if plugin already registered
-            if jq -e ".[] | select(.name == \"$plugin_name\")" "$installed_plugins_file" > /dev/null 2>&1; then
-                echo "  Plugin already registered in: $installed_plugins_file"
-            else
-                # Add plugin to array
-                local tmp_file=$(mktemp)
-                jq --argjson entry "$plugin_entry" '. + [$entry]' "$installed_plugins_file" > "$tmp_file" && mv "$tmp_file" "$installed_plugins_file"
-                echo "  Registered plugin in: $installed_plugins_file"
-            fi
+    if [ -f "$installed_plugins_file" ]; then
+        # File exists - check if plugin already registered
+        if jq -e ".plugins[\"$plugin_key\"]" "$installed_plugins_file" > /dev/null 2>&1; then
+            echo "  Plugin already registered in: $installed_plugins_file"
         else
-            # File doesn't exist - create it with the plugin
-            echo "[$plugin_entry]" | jq '.' > "$installed_plugins_file"
-            echo "  Created and registered in: $installed_plugins_file"
+            # Add plugin to plugins object
+            local tmp_file=$(mktemp)
+            jq --arg key "$plugin_key" \
+               --arg path "$plugin_path" \
+               --arg ts "$timestamp" \
+               '.plugins[$key] = [{"scope": "user", "installPath": $path, "version": "1.0.0", "installedAt": $ts, "lastUpdated": $ts}]' \
+               "$installed_plugins_file" > "$tmp_file" && mv "$tmp_file" "$installed_plugins_file"
+            echo "  Registered plugin in: $installed_plugins_file"
         fi
     else
-        # Fallback without jq
-        if [ ! -f "$installed_plugins_file" ]; then
-            # Create new file
-            cat > "$installed_plugins_file" << EOF
-[
-  {
-    "name": "$plugin_name",
-    "path": "$plugin_path",
-    "enabled": true
+        # File doesn't exist - create it
+        cat > "$installed_plugins_file" << EOF
+{
+  "version": 2,
+  "plugins": {
+    "$plugin_key": [
+      {
+        "scope": "user",
+        "installPath": "$plugin_path",
+        "version": "1.0.0",
+        "installedAt": "$timestamp",
+        "lastUpdated": "$timestamp"
+      }
+    ]
   }
-]
+}
 EOF
-            echo "  Created: $installed_plugins_file"
-        elif ! grep -q "\"$plugin_name\"" "$installed_plugins_file"; then
-            # File exists but plugin not registered - append before closing bracket
-            sed -i.bak 's/]$/,{"name":"'"$plugin_name"'","path":"'"$plugin_path"'","enabled":true}]/' "$installed_plugins_file"
-            rm -f "$installed_plugins_file.bak"
-            echo "  Registered plugin in: $installed_plugins_file"
-        else
-            echo "  Plugin already registered in: $installed_plugins_file"
-        fi
+        echo "  Created and registered in: $installed_plugins_file"
     fi
 }
 
