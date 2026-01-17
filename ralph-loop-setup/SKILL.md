@@ -1,3 +1,8 @@
+---
+name: ralph-loop-setup
+description: Set up automated task implementation system with Ralph Wiggum Loop. Use when the user wants to create todolist.json, progress.txt, and ralph_wiggum_loop.sh files for automated task-based development.
+---
+
 # Ralph Loop Setup Skill
 
 You are helping the user set up the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to work through a project todo list.
