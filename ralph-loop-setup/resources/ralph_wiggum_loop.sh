@@ -28,10 +28,10 @@ WORKING_DIR=""
 
 # Usage function
 usage() {
-    echo "Usage: $0 [OPTIONS] <todo-file>"
+    echo "Usage: $0 [OPTIONS] [todo-file]"
     echo ""
     echo "Arguments:"
-    echo "  <todo-file>           Path to the todo list JSON file (required)"
+    echo "  [todo-file]           Path to the todo list JSON file (default: ./todolist.json)"
     echo ""
     echo "Options:"
     echo "  --max-iterations N    Maximum number of iterations (default: unlimited)"
@@ -43,8 +43,9 @@ usage() {
     echo "  --help, -h            Show this help message"
     echo ""
     echo "Examples:"
-    echo "  $0 ./my-project/todolist.json               # Run with todo list file"
-    echo "  $0 --max-iterations 10 ./todolist.json      # Run at most 10 iterations"
+    echo "  $0                                          # Run with ./todolist.json"
+    echo "  $0 ./my-project/todolist.json               # Run with specific todo list file"
+    echo "  $0 --max-iterations 10                      # Run at most 10 iterations"
     echo "  $0 -m 5 -w /path/to/project ./todolist.json # Run 5 iterations in specific dir"
     exit 0
 }
@@ -105,11 +106,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Validate todo file argument
+# Default to todolist.json in script directory if not specified
 if [[ -z "$TODO_FILE" ]]; then
-    echo -e "${RED}Error: Todo list file is required${NC}"
-    echo "Use --help for usage information"
-    exit 1
+    TODO_FILE="${SCRIPT_DIR}/todolist.json"
+    echo -e "${YELLOW}No todo file specified, using: $TODO_FILE${NC}"
 fi
 
 # Convert todo file to absolute path

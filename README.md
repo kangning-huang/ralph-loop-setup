@@ -139,20 +139,23 @@ The skill will guide you through creating a todo list:
 
 ### Step 2: Run the Loop
 
-After setup, run the automation script:
+After setup, run the automation script from the project directory:
 
 ```bash
-./ralph_wiggum_loop.sh ./todolist.json
+./ralph_wiggum_loop.sh
 ```
+
+The script automatically finds `todolist.json` in the same directory.
 
 ### Script Options
 
 ```bash
-./ralph_wiggum_loop.sh [OPTIONS] <todo-file>
+./ralph_wiggum_loop.sh [OPTIONS] [todo-file]
 ```
 
 | Option | Description |
 |--------|-------------|
+| `[todo-file]` | Path to todo list JSON (default: ./todolist.json) |
 | `-m N` | Maximum number of iterations (default: unlimited) |
 | `-w DIR` | Working directory for Claude (default: todo file directory) |
 | `-t SEC` | Timeout per task in seconds (default: 1800) |
@@ -161,8 +164,10 @@ After setup, run the automation script:
 Examples:
 
 ```bash
-./ralph_wiggum_loop.sh -m 10 ./todolist.json      # Run at most 10 tasks
-./ralph_wiggum_loop.sh -t 3600 ./todolist.json    # 1 hour timeout per task
+./ralph_wiggum_loop.sh                            # Run with ./todolist.json
+./ralph_wiggum_loop.sh -m 10                      # Run at most 10 tasks
+./ralph_wiggum_loop.sh -t 3600                    # 1 hour timeout per task
+./ralph_wiggum_loop.sh ./other-todolist.json      # Use a different todo file
 ```
 
 ---

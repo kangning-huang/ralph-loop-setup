@@ -1,21 +1,105 @@
 ---
 name: ralph-loop-setup
-description: Set up automated task implementation system with Ralph Wiggum Loop. Use when the user wants to create todolist.json, progress.txt, and ralph_wiggum_loop.sh files for automated task-based development.
+description: Set up or update automated task implementation system with Ralph Wiggum Loop. Use when the user wants to create or update todolist.json, progress.txt, and ralph_wiggum_loop.sh files for automated task-based development.
 ---
 
 # Ralph Loop Setup Skill
 
-You are helping the user set up the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to work through a project todo list.
+You are helping the user set up or update the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to work through a project todo list.
 
 **Important**: This skill sets up the files. It does not run the loop itself. After setup, the user runs the loop separately.
 
-## What You Will Create
+## What You Will Create/Update
 
 The Ralph Wiggum Loop requires 3 files in the user's project:
 
 1. **todolist.json** - Task State Memory: tracks tasks, priorities, dependencies, and status
 2. **progress.txt** - Learning Memory: logs what happened in each session for future reference
 3. **ralph_wiggum_loop.sh** - Orchestration script: runs the loop, launching fresh Claude sessions
+
+## Step 0: Check for Existing Setup
+
+**IMPORTANT**: Before starting the setup flow, check if the Ralph Wiggum Loop files already exist in the current working directory:
+
+1. Check for `todolist.json`
+2. Check for `progress.txt`
+3. Check for `ralph_wiggum_loop.sh`
+
+Use the Glob tool to check for these files in the current working directory.
+
+### If All 3 Files Exist → UPDATE MODE
+
+If all 3 files already exist, the user likely wants to update their todo list. Skip to **Update Mode** below.
+
+### If Files Don't Exist → SETUP MODE
+
+If any files are missing, proceed with the normal **Setup Flow** below.
+
+---
+
+## UPDATE MODE (Files Already Exist)
+
+When the Ralph Wiggum Loop is already set up, ask the user how they want to update their todo list.
+
+### Step U1: Show Current Status
+
+First, read the existing `todolist.json` and show the user:
+- Project name
+- Current task statistics (pending, passed, failed)
+- A brief summary of existing tasks
+
+### Step U2: Ask What They Want to Do
+
+Use the AskUserQuestion tool to ask:
+
+**"Your Ralph Wiggum Loop is already set up. How would you like to update your todo list?"**
+
+Options:
+1. **Add tasks from a file** - Import tasks from markdown, text, or other files
+2. **Add tasks manually** - Describe new tasks to add (I'll help break them down)
+3. **Review and modify existing tasks** - View, edit priorities, or remove tasks
+4. **Reset todo list** - Clear all tasks and start fresh (keeps progress.txt history)
+
+### Step U3: Handle the User's Choice
+
+**Option 1: Add tasks from a file**
+1. Ask the user to provide the file path(s) or paste the content
+2. Read and parse the files to understand the new tasks
+3. Extract task information (name, description, dependencies, priorities)
+4. Ask about categorization and priorities
+5. Show proposed new tasks and confirm with user
+6. Merge new tasks into existing todolist.json (assign new IDs that don't conflict)
+7. Update statistics
+
+**Option 2: Add tasks manually**
+1. Ask: "What new tasks do you want to add? Describe the features or work items."
+2. Help break them down into well-structured tasks
+3. Ask about dependencies on existing tasks
+4. Show proposed tasks and confirm
+5. Add to todolist.json with appropriate IDs and priorities
+6. Update statistics
+
+**Option 3: Review and modify existing tasks**
+1. Display all tasks with their status, priority, and dependencies
+2. Ask what changes they want to make:
+   - Change task priority
+   - Edit task description or acceptance criteria
+   - Mark tasks as skipped
+   - Remove tasks entirely
+   - Reset failed tasks back to pending
+3. Apply changes and update statistics
+
+**Option 4: Reset todo list**
+1. Confirm this is what they want (this removes all tasks)
+2. Ask about their new tasks (same as Step 2B in Setup Flow)
+3. Create fresh todolist.json
+4. Keep progress.txt as historical record (add a separator noting the reset)
+
+After any update, show the updated statistics and remind them how to run the loop.
+
+---
+
+## SETUP MODE (Fresh Setup)
 
 ## Setup Flow
 
@@ -178,14 +262,16 @@ Setup Complete! Created 3 files:
 
 To run the Ralph Wiggum Loop:
 
-   ./ralph_wiggum_loop.sh ./todolist.json
+   ./ralph_wiggum_loop.sh
+
+(The script automatically finds todolist.json in the same directory)
 
 Options:
    -m N    Maximum iterations (default: unlimited)
    -t SEC  Timeout per task in seconds (default: 1800)
 
 Example - run 5 tasks then stop:
-   ./ralph_wiggum_loop.sh -m 5 ./todolist.json
+   ./ralph_wiggum_loop.sh -m 5
 
 The loop will:
 - Pick the highest-priority pending task
