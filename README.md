@@ -73,6 +73,55 @@ Install through Claude Code in two steps:
 
 ---
 
+## Installation on Other Platforms
+
+### OpenAI Codex CLI
+
+**Option 1: Using skill-installer (Recommended)**
+
+In Codex CLI, ask it to install from this GitHub repo:
+```
+Install the ralph-loop-setup skill from kangning-huang/ralph_wiggum_loop
+```
+
+**Option 2: Manual Installation**
+
+1. Clone this repository
+2. Copy the skill folder to your Codex skills directory:
+   ```bash
+   cp -r ralph-loop-setup ~/.codex/skills/
+   ```
+3. Restart Codex CLI
+
+Usage: Type `$ralph-loop-setup` or describe your task and Codex will invoke it automatically.
+
+### Windsurf
+
+**Option 1: Manual Installation (Global)**
+
+1. Clone this repository
+2. Copy the skill folder:
+   ```bash
+   mkdir -p ~/.codeium/windsurf/skills
+   cp -r ralph-loop-setup ~/.codeium/windsurf/skills/
+   ```
+3. Restart Windsurf
+
+**Option 2: Project-level Installation**
+
+1. Create the skills directory in your project:
+   ```bash
+   mkdir -p .windsurf/skills
+   ```
+2. Copy the skill folder:
+   ```bash
+   cp -r /path/to/ralph-loop-setup .windsurf/skills/
+   ```
+
+Usage: Type `@ralph-loop-setup` in Cascade or describe your task.
+
+---
+
 ## Usage
 
 ### Step 1: Run the Setup Skill
