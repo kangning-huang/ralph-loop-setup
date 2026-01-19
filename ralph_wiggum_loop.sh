@@ -469,40 +469,88 @@ get_task_details() {
 }
 
 # Function to update task status in todo list
+# Issue #24: Added error handling to prevent race conditions from crashing the loop
 update_task_status() {
     local task_id="$1"
     local new_status="$2"
     local notes="$3"
 
     local tmp_file=$(mktemp)
-    jq --arg id "$task_id" --arg status "$new_status" --arg notes "$notes" '
-        .tasks = [.tasks[] |
-            if .id == $id then
-                .status = $status |
-                .notes = (if .notes == null or .notes == "" then $notes else .notes + "\n" + $notes end)
-            else . end
-        ] |
-        .statistics.pending = ([.tasks[] | select(.status == "pending")] | length) |
-        .statistics.in_progress = ([.tasks[] | select(.status == "in_progress")] | length) |
-        .statistics.passed = ([.tasks[] | select(.status == "passed")] | length) |
-        .statistics.failed = ([.tasks[] | select(.status == "failed")] | length) |
-        .statistics.skipped = ([.tasks[] | select(.status == "skipped")] | length) |
-        .metadata.last_updated = (now | strftime("%Y-%m-%d"))
-    ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
+    local max_retries=3
+    local retry_count=0
+    local success=false
+
+    while [ $retry_count -lt $max_retries ] && [ "$success" = false ]; do
+        if jq --arg id "$task_id" --arg status "$new_status" --arg notes "$notes" '
+            .tasks = [.tasks[] |
+                if .id == $id then
+                    .status = $status |
+                    .notes = (if .notes == null or .notes == "" then $notes else .notes + "\n" + $notes end)
+                else . end
+            ] |
+            .statistics.pending = ([.tasks[] | select(.status == "pending")] | length) |
+            .statistics.in_progress = ([.tasks[] | select(.status == "in_progress")] | length) |
+            .statistics.passed = ([.tasks[] | select(.status == "passed")] | length) |
+            .statistics.failed = ([.tasks[] | select(.status == "failed")] | length) |
+            .statistics.skipped = ([.tasks[] | select(.status == "skipped")] | length) |
+            .metadata.last_updated = (now | strftime("%Y-%m-%d"))
+        ' "$TODO_FILE" > "$tmp_file" 2>/dev/null && mv "$tmp_file" "$TODO_FILE" 2>/dev/null; then
+            success=true
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                sleep 0.5
+            fi
+        fi
+    done
+
+    # Clean up temp file if it still exists
+    rm -f "$tmp_file" 2>/dev/null || true
+
+    if [ "$success" = false ]; then
+        echo -e "${YELLOW}Warning: Failed to update task status for $task_id after $max_retries attempts (Issue #24)${NC}" >&2
+        return 1
+    fi
+
+    return 0
 }
 
 # Function to increment failure count
+# Issue #24: Added error handling to prevent race conditions from crashing the loop
 increment_failure_count() {
     local task_id="$1"
 
     local tmp_file=$(mktemp)
-    jq --arg id "$task_id" '
-        .tasks = [.tasks[] |
-            if .id == $id then
-                .failure_count = (.failure_count + 1)
-            else . end
-        ]
-    ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
+    local max_retries=3
+    local retry_count=0
+    local success=false
+
+    while [ $retry_count -lt $max_retries ] && [ "$success" = false ]; do
+        if jq --arg id "$task_id" '
+            .tasks = [.tasks[] |
+                if .id == $id then
+                    .failure_count = (.failure_count + 1)
+                else . end
+            ]
+        ' "$TODO_FILE" > "$tmp_file" 2>/dev/null && mv "$tmp_file" "$TODO_FILE" 2>/dev/null; then
+            success=true
+        else
+            retry_count=$((retry_count + 1))
+            if [ $retry_count -lt $max_retries ]; then
+                sleep 0.5
+            fi
+        fi
+    done
+
+    # Clean up temp file if it still exists
+    rm -f "$tmp_file" 2>/dev/null || true
+
+    if [ "$success" = false ]; then
+        echo -e "${YELLOW}Warning: Failed to increment failure count for $task_id after $max_retries attempts (Issue #24)${NC}" >&2
+        return 1
+    fi
+
+    return 0
 }
 
 # ============================================================================
@@ -1299,8 +1347,9 @@ handle_timeout() {
     echo -e "${YELLOW}Handling timeout for task $task_id...${NC}"
 
     # Update todo list to mark as failed
-    update_task_status "$task_id" "pending" "Timed out after $((TIMEOUT_SECONDS / 60)) minutes"
-    increment_failure_count "$task_id"
+    # Issue #24: Added || true to prevent loop exit on status update failure
+    update_task_status "$task_id" "pending" "Timed out after $((TIMEOUT_SECONDS / 60)) minutes" || true
+    increment_failure_count "$task_id" || true
 
     # Log progress
     log_progress "$task_id" "TIMEOUT" \
@@ -1318,8 +1367,9 @@ handle_hung_process() {
     echo -e "${RED}Handling hung process for task $task_id...${NC}"
 
     # Update todo list to mark as pending (will retry)
-    update_task_status "$task_id" "pending" "Process hung - no log activity for ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s (Issue #22)"
-    increment_failure_count "$task_id"
+    # Issue #24: Added || true to prevent loop exit on status update failure
+    update_task_status "$task_id" "pending" "Process hung - no log activity for ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s (Issue #22)" || true
+    increment_failure_count "$task_id" || true
 
     # Log progress
     log_progress "$task_id" "HUNG" \
@@ -1337,8 +1387,9 @@ handle_empty_log() {
     echo -e "${RED}Handling empty log for task $task_id...${NC}"
 
     # Update todo list to mark as pending (will retry)
-    update_task_status "$task_id" "pending" "Empty log detected - process produced no output (Issue #22)"
-    increment_failure_count "$task_id"
+    # Issue #24: Added || true to prevent loop exit on status update failure
+    update_task_status "$task_id" "pending" "Empty log detected - process produced no output (Issue #22)" || true
+    increment_failure_count "$task_id" || true
 
     # Log progress
     log_progress "$task_id" "EMPTY_LOG" \
@@ -1357,8 +1408,9 @@ handle_api_error() {
     echo -e "${RED}Handling API error for task $task_id: $error_msg${NC}"
 
     # Update todo list to mark as pending (will retry)
-    update_task_status "$task_id" "pending" "API error: $error_msg (Issue #22)"
-    increment_failure_count "$task_id"
+    # Issue #24: Added || true to prevent loop exit on status update failure
+    update_task_status "$task_id" "pending" "API error: $error_msg (Issue #22)" || true
+    increment_failure_count "$task_id" || true
 
     # Log progress
     log_progress "$task_id" "API_ERROR" \
@@ -1414,7 +1466,8 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo ""
 
     # Mark task as in_progress
-    update_task_status "$task_id" "in_progress" ""
+    # Issue #24: Added || true to prevent loop exit on status update failure
+    update_task_status "$task_id" "in_progress" "" || true
 
     # Create the prompt file
     prompt_file=$(create_claude_prompt "$task_id")
@@ -1466,7 +1519,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                         break
                     else
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        update_task_status "$task_id" "in_progress" "Retry after hung process (attempt $((attempt + 1)))"
+                        update_task_status "$task_id" "in_progress" "Retry after hung process (attempt $((attempt + 1)))" || true
                     fi
                     ;;
                 126)
@@ -1477,7 +1530,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                         break
                     else
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        update_task_status "$task_id" "in_progress" "Retry after empty log (attempt $((attempt + 1)))"
+                        update_task_status "$task_id" "in_progress" "Retry after empty log (attempt $((attempt + 1)))" || true
                     fi
                     ;;
                 127)
@@ -1490,7 +1543,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                         break
                     else
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        update_task_status "$task_id" "in_progress" "Retry after API error (attempt $((attempt + 1)))"
+                        update_task_status "$task_id" "in_progress" "Retry after API error (attempt $((attempt + 1)))" || true
                     fi
                     ;;
                 *)
@@ -1510,7 +1563,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                         echo -e "${GREEN}Artifact validation passed! Task appears to have completed successfully.${NC}"
                         # Update task status to passed if artifacts indicate success
                         if [ "$current_status" != "passed" ]; then
-                            update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code"
+                            update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code" || true
                             log_progress "$task_id" "PASSED (auto-validated)" \
                                 "Task completed successfully (validated by artifact check)" \
                                 "" \
@@ -1523,7 +1576,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                     if [ $attempt -lt $MAX_RETRIES ]; then
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
                         # Reset status back to in_progress for retry
-                        update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))"
+                        update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))" || true
                     fi
                     ;;
             esac
@@ -1540,7 +1593,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
             echo -e "${BLUE}Final artifact validation before marking task as failed...${NC}"
             if check_task_artifacts "$task_id"; then
                 echo -e "${GREEN}Final artifact validation passed! Marking task as successful.${NC}"
-                update_task_status "$task_id" "passed" "Auto-validated after retries: artifacts indicate successful completion"
+                update_task_status "$task_id" "passed" "Auto-validated after retries: artifacts indicate successful completion" || true
                 log_progress "$task_id" "PASSED (auto-validated)" \
                     "Task completed successfully (final artifact validation passed)" \
                     "" \
@@ -1549,8 +1602,8 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
             else
                 # Claude didn't update status after all retries, mark as failed
                 echo -e "${RED}Artifact validation failed (score: $ARTIFACT_PERCENTAGE%). Marking task as failed.${NC}"
-                update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code, artifact score: $ARTIFACT_PERCENTAGE%)"
-                increment_failure_count "$task_id"
+                update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code, artifact score: $ARTIFACT_PERCENTAGE%)" || true
+                increment_failure_count "$task_id" || true
                 log_progress "$task_id" "FAILED" \
                     "Claude failed after $MAX_RETRIES retry attempts" \
                     "Final exit code: $last_exit_code, Artifact validation score: $ARTIFACT_PERCENTAGE%" \
