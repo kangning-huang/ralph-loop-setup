@@ -245,13 +245,14 @@ update_task_status() {
         .tasks = [.tasks[] |
             if .id == $id then
                 .status = $status |
-                .notes = (if .notes == "" then $notes else .notes + "\n" + $notes end)
+                .notes = (if .notes == null or .notes == "" then $notes else .notes + "\n" + $notes end)
             else . end
         ] |
         .statistics.pending = ([.tasks[] | select(.status == "pending")] | length) |
         .statistics.in_progress = ([.tasks[] | select(.status == "in_progress")] | length) |
         .statistics.passed = ([.tasks[] | select(.status == "passed")] | length) |
         .statistics.failed = ([.tasks[] | select(.status == "failed")] | length) |
+        .statistics.skipped = ([.tasks[] | select(.status == "skipped")] | length) |
         .metadata.last_updated = (now | strftime("%Y-%m-%d"))
     ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
 }
@@ -316,7 +317,7 @@ create_claude_prompt() {
     local acceptance_criteria=$(echo "$task_json" | jq -r '.acceptance_criteria | join("\n  - ")')
     local files_affected=$(echo "$task_json" | jq -r '.files_likely_affected | join(", ")')
     local dependencies=$(echo "$task_json" | jq -r '.dependencies | join(", ")')
-    local notes=$(echo "$task_json" | jq -r '.notes')
+    local notes=$(echo "$task_json" | jq -r '.notes // ""')
     local failure_count=$(echo "$task_json" | jq -r '.failure_count')
 
     # Get build/test commands from todo list metadata (optional)
