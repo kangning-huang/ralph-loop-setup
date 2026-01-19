@@ -14,3 +14,4 @@ Thumbs.db
 
 # Logs (keep progress.txt template, ignore user-generated logs in other locations)
 *.log
+logs/
