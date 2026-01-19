@@ -10,53 +10,92 @@
     "extra_instructions": ""
   },
   "priority_guidelines": {
-    "description": "Priority is determined by: 1) Bug fixes before features, 2) Core functionality before enhancements, 3) Foundation tasks before dependent tasks",
+    "description": "Priority is determined by: 1) Bug fixes before features, 2) Core functionality before enhancements, 3) Foundation tasks before dependent tasks. Note: Independent task chains (different prefixes like FEATURE-A vs FEATURE-B) should NOT have cross-chain dependencies to enable parallel processing.",
     "scale": "1-10 where 1 is highest priority"
   },
   "tasks": [
     {
-      "id": "EXAMPLE-001",
-      "name": "Example Task",
-      "description": "This is an example task to demonstrate the todo list structure. Replace this with your actual tasks.",
+      "id": "FEATURE-A-001",
+      "name": "Feature A: Setup base module",
+      "description": "Set up the base module for Feature A. This is independent of Feature B and can run in parallel.",
       "category": "core",
       "priority": 1,
       "status": "pending",
       "failure_count": 0,
       "dependencies": [],
       "acceptance_criteria": [
-        "First acceptance criterion",
-        "Second acceptance criterion",
+        "Base module structure created",
+        "Core interfaces defined",
         "Build compiles without errors"
       ],
       "files_likely_affected": [
-        "src/example.js",
-        "src/utils.js"
+        "src/feature-a/base.js",
+        "src/feature-a/index.js"
       ],
       "notes": ""
     },
     {
-      "id": "EXAMPLE-002",
-      "name": "Another Example Task",
-      "description": "This task depends on EXAMPLE-001 and will only be worked on after EXAMPLE-001 passes.",
+      "id": "FEATURE-A-002",
+      "name": "Feature A: Add advanced functionality",
+      "description": "Build on Feature A base module. Depends only on FEATURE-A-001, not on any Feature B tasks.",
       "category": "enhancement",
       "priority": 2,
       "status": "pending",
       "failure_count": 0,
-      "dependencies": ["EXAMPLE-001"],
+      "dependencies": ["FEATURE-A-001"],
       "acceptance_criteria": [
-        "Builds on EXAMPLE-001 functionality",
-        "Adds new capability",
+        "Builds on FEATURE-A-001 functionality",
+        "Advanced features implemented",
         "Tests pass"
       ],
       "files_likely_affected": [
-        "src/example.js"
+        "src/feature-a/advanced.js"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "FEATURE-B-001",
+      "name": "Feature B: Initialize component",
+      "description": "Initialize the Feature B component. This is independent of Feature A and can run in parallel.",
+      "category": "core",
+      "priority": 1,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": [],
+      "acceptance_criteria": [
+        "Component structure created",
+        "Basic functionality implemented",
+        "Build compiles without errors"
+      ],
+      "files_likely_affected": [
+        "src/feature-b/component.js",
+        "src/feature-b/index.js"
+      ],
+      "notes": ""
+    },
+    {
+      "id": "FEATURE-B-002",
+      "name": "Feature B: Extend component",
+      "description": "Extend the Feature B component. Depends only on FEATURE-B-001, not on any Feature A tasks.",
+      "category": "enhancement",
+      "priority": 2,
+      "status": "pending",
+      "failure_count": 0,
+      "dependencies": ["FEATURE-B-001"],
+      "acceptance_criteria": [
+        "Builds on FEATURE-B-001 functionality",
+        "Extended features implemented",
+        "Tests pass"
+      ],
+      "files_likely_affected": [
+        "src/feature-b/extensions.js"
       ],
       "notes": ""
     }
   ],
   "statistics": {
-    "total_tasks": 2,
-    "pending": 2,
+    "total_tasks": 4,
+    "pending": 4,
     "in_progress": 0,
     "passed": 0,
     "failed": 0,

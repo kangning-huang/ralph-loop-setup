@@ -13,6 +13,9 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TIMEOUT_SECONDS=1800  # 30 minutes
 MAX_FAILURES=5
+MAX_RETRIES=3  # Number of retry attempts per task before moving on
+RETRY_DELAY=5  # Seconds to wait between retry attempts
+EXPONENTIAL_BACKOFF=false  # If true, use exponential backoff (5s, 10s, 15s, etc.)
 LOCK_FILE=""  # Will be set after TODO_FILE is determined
 
 # Colors for output
@@ -41,6 +44,10 @@ usage() {
     echo "  -w DIR                Short form of --working-dir"
     echo "  --timeout SECONDS     Timeout per iteration in seconds (default: 1800)"
     echo "  -t SECONDS            Short form of --timeout"
+    echo "  --max-retries N       Maximum retry attempts per task (default: 3)"
+    echo "  -r N                  Short form of --max-retries"
+    echo "  --retry-delay SECS    Delay between retry attempts in seconds (default: 5)"
+    echo "  --exponential-backoff Use exponential backoff for retries (5s, 10s, 15s, etc.)"
     echo "  --help, -h            Show this help message"
     echo ""
     echo "Examples:"
@@ -85,6 +92,34 @@ while [[ $# -gt 0 ]]; do
             fi
             TIMEOUT_SECONDS="$2"
             shift 2
+            ;;
+        --max-retries|-r)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo -e "${RED}Error: --max-retries requires a numeric value${NC}"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}Error: --max-retries must be a positive integer${NC}"
+                exit 1
+            fi
+            MAX_RETRIES="$2"
+            shift 2
+            ;;
+        --retry-delay)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo -e "${RED}Error: --retry-delay requires a numeric value${NC}"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}Error: --retry-delay must be a positive integer${NC}"
+                exit 1
+            fi
+            RETRY_DELAY="$2"
+            shift 2
+            ;;
+        --exponential-backoff)
+            EXPONENTIAL_BACKOFF=true
+            shift
             ;;
         --help|-h)
             usage
@@ -132,6 +167,10 @@ fi
 PROGRESS_FILE="$(dirname "$TODO_FILE")/progress.txt"
 PROMPT_FILE="$(dirname "$TODO_FILE")/.claude_prompt.md"
 LOCK_FILE="$(dirname "$TODO_FILE")/.ralph_loop.lock"
+LOG_DIR="$(dirname "$TODO_FILE")/logs/claude_outputs"
+
+# Create log directory if it doesn't exist
+mkdir -p "$LOG_DIR"
 
 # Read project info from todo list
 PROJECT_NAME=$(jq -r '.metadata.project // "Project"' "$TODO_FILE" 2>/dev/null || echo "Project")
@@ -150,9 +189,12 @@ echo ""
 echo -e "${YELLOW}Configuration:${NC}"
 echo "  Max iterations: $MAX_ITERATIONS"
 echo "  Timeout per iteration: $((TIMEOUT_SECONDS / 60)) minutes"
+echo "  Max retries per task: $MAX_RETRIES"
+echo "  Retry delay: ${RETRY_DELAY}s$([ "$EXPONENTIAL_BACKOFF" = true ] && echo " (exponential backoff enabled)")"
 echo "  Todo list: $TODO_FILE"
 echo "  Working directory: $WORKING_DIR"
 echo "  Progress file: $PROGRESS_FILE"
+echo "  Log directory: $LOG_DIR"
 echo ""
 
 # Check dependencies
@@ -427,6 +469,7 @@ log_progress() {
     local summary="$3"
     local error_msg="$4"
     local lessons="$5"
+    local log_file="${6:-$CURRENT_LOG_FILE}"
 
     local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
 
@@ -438,6 +481,12 @@ Task ID: $task_id
 Status: $status
 Summary: $summary
 EOF
+
+    if [ -n "$log_file" ] && [ -f "$log_file" ]; then
+        cat >> "$PROGRESS_FILE" << EOF
+Log File: $log_file
+EOF
+    fi
 
     if [ -n "$error_msg" ]; then
         cat >> "$PROGRESS_FILE" << EOF
@@ -600,13 +649,38 @@ EOF
     echo "$PROMPT_FILE"
 }
 
+# Global variable to store current log file path
+CURRENT_LOG_FILE=""
+
 # Function to run Claude with timeout
 run_claude_with_timeout() {
     local prompt_file="$1"
     local task_id="$2"
+    local attempt_num="${3:-1}"
+
+    # Generate log file path with timestamp and attempt number
+    local timestamp=$(date '+%Y%m%d_%H%M%S')
+    local log_file="${LOG_DIR}/${task_id}_${timestamp}_attempt${attempt_num}.log"
+    local stderr_log="${LOG_DIR}/${task_id}_${timestamp}_attempt${attempt_num}_stderr.log"
+    CURRENT_LOG_FILE="$log_file"
 
     echo -e "${BLUE}Running Claude CLI...${NC}"
+    echo -e "${BLUE}Log file: $log_file${NC}"
     echo -e "${BLUE}────────────────────────────────────────────────────────────────${NC}"
+
+    # Write log header
+    cat > "$log_file" << EOF
+================================================================================
+Ralph Wiggum Loop - Claude Execution Log
+================================================================================
+Task ID: $task_id
+Attempt: $attempt_num
+Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
+Timeout: ${TIMEOUT_SECONDS}s
+Working Directory: $WORKING_DIR
+================================================================================
+
+EOF
 
     # Use timeout command (gtimeout on macOS if coreutils installed, otherwise use perl)
     local timeout_cmd=""
@@ -622,25 +696,16 @@ run_claude_with_timeout() {
     pushd "$WORKING_DIR" > /dev/null
 
     if [ -n "$timeout_cmd" ]; then
-        # Use timeout command with unbuffered output
-        # Using stdbuf if available for line-buffered output
+        # Use timeout command with tee to capture output while displaying
         if command -v stdbuf &> /dev/null; then
-            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 || exit_code=$?
+            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
         else
-            # Run directly - output should stream in real-time
-            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 || exit_code=$?
+            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
         fi
     else
         # Fallback: use background process with manual timeout
-        # Create a named pipe for capturing output while displaying it
-        local fifo_path="/tmp/claude_output_$$"
-        mkfifo "$fifo_path" 2>/dev/null || true
-
-        # Start tee to display output in real-time
-        cat "$fifo_path" &
-        local cat_pid=$!
-
-        claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" > "$fifo_path" 2>&1 &
+        # Use log file directly instead of /tmp
+        claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
         local claude_pid=$!
 
         local elapsed=0
@@ -660,13 +725,24 @@ run_claude_with_timeout() {
         if [ $exit_code -eq 0 ]; then
             wait $claude_pid || exit_code=$?
         fi
+    fi
 
-        # Cleanup
-        kill $cat_pid 2>/dev/null || true
-        rm -f "$fifo_path"
+    # Append footer to log file
+    cat >> "$log_file" << EOF
+
+================================================================================
+Execution completed at: $(date '+%Y-%m-%d %H:%M:%S')
+Exit code: $exit_code
+================================================================================
+EOF
+
+    # Remove empty stderr log if no errors
+    if [ ! -s "$stderr_log" ]; then
+        rm -f "$stderr_log"
     fi
 
     echo -e "${BLUE}────────────────────────────────────────────────────────────────${NC}"
+    echo -e "${BLUE}Log saved to: $log_file${NC}"
 
     # Return to original directory
     popd > /dev/null
@@ -746,29 +822,69 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo -e "${BLUE}Created prompt file: $prompt_file${NC}"
     echo ""
 
-    # Run Claude
+    # Run Claude with retry logic
     start_time=$(date +%s)
+    attempt=1
+    task_succeeded=false
+    last_exit_code=0
 
-    if run_claude_with_timeout "$prompt_file" "$task_id"; then
-        echo -e "${GREEN}Claude completed successfully.${NC}"
-    else
-        exit_code=$?
-        if [ $exit_code -eq 124 ]; then
-            # Timeout
-            handle_timeout "$task_id"
-        else
-            echo -e "${RED}Claude exited with code $exit_code${NC}"
-            # Check if Claude updated the files, if not, mark as failed
-            current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
-            if [ "$current_status" = "in_progress" ]; then
-                # Claude didn't update status, mark as failed
-                update_task_status "$task_id" "pending" "Claude exited unexpectedly with code $exit_code"
-                increment_failure_count "$task_id"
-                log_progress "$task_id" "FAILED" \
-                    "Claude exited unexpectedly" \
-                    "Exit code: $exit_code" \
-                    "Check if there are environmental issues or if the task is too complex."
+    while [ $attempt -le $MAX_RETRIES ]; do
+        if [ $attempt -gt 1 ]; then
+            # Calculate delay (with optional exponential backoff)
+            if [ "$EXPONENTIAL_BACKOFF" = true ]; then
+                current_delay=$((RETRY_DELAY * attempt))
+            else
+                current_delay=$RETRY_DELAY
             fi
+            echo -e "${YELLOW}Waiting ${current_delay}s before retry attempt $attempt of $MAX_RETRIES...${NC}"
+            sleep $current_delay
+            echo ""
+        fi
+
+        echo -e "${BLUE}Attempt $attempt of $MAX_RETRIES${NC}"
+
+        if run_claude_with_timeout "$prompt_file" "$task_id" "$attempt"; then
+            echo -e "${GREEN}Claude completed successfully on attempt $attempt.${NC}"
+            task_succeeded=true
+            break
+        else
+            last_exit_code=$?
+            if [ $last_exit_code -eq 124 ]; then
+                # Timeout - don't retry timeouts, they take too long
+                echo -e "${RED}Task timed out on attempt $attempt. Not retrying timeouts.${NC}"
+                handle_timeout "$task_id"
+                break
+            else
+                echo -e "${RED}Claude exited with code $last_exit_code on attempt $attempt${NC}"
+                # Check if Claude updated the status to passed
+                current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+                if [ "$current_status" = "passed" ]; then
+                    echo -e "${GREEN}Task was marked as passed despite exit code.${NC}"
+                    task_succeeded=true
+                    break
+                fi
+
+                if [ $attempt -lt $MAX_RETRIES ]; then
+                    echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
+                    # Reset status back to in_progress for retry
+                    update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))"
+                fi
+            fi
+        fi
+        attempt=$((attempt + 1))
+    done
+
+    # Handle final failure after all retries exhausted
+    if [ "$task_succeeded" = false ] && [ $last_exit_code -ne 124 ]; then
+        current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+        if [ "$current_status" = "in_progress" ]; then
+            # Claude didn't update status after all retries, mark as failed
+            update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code)"
+            increment_failure_count "$task_id"
+            log_progress "$task_id" "FAILED" \
+                "Claude failed after $MAX_RETRIES retry attempts" \
+                "Final exit code: $last_exit_code" \
+                "Task failed consistently across all retry attempts. Consider breaking into smaller sub-tasks or checking for environmental issues."
         fi
     fi
 
