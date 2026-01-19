@@ -13,6 +13,7 @@ set -e
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TIMEOUT_SECONDS=1800  # 30 minutes
 MAX_FAILURES=5
+LOCK_FILE=""  # Will be set after TODO_FILE is determined
 
 # Colors for output
 RED='\033[0;31m'
@@ -130,6 +131,7 @@ fi
 # Set derived paths
 PROGRESS_FILE="$(dirname "$TODO_FILE")/progress.txt"
 PROMPT_FILE="$(dirname "$TODO_FILE")/.claude_prompt.md"
+LOCK_FILE="$(dirname "$TODO_FILE")/.ralph_loop.lock"
 
 # Read project info from todo list
 PROJECT_NAME=$(jq -r '.metadata.project // "Project"' "$TODO_FILE" 2>/dev/null || echo "Project")
@@ -168,6 +170,153 @@ if [ ! -f "$TODO_FILE" ]; then
     echo -e "${RED}Error: Todo list file not found at $TODO_FILE${NC}"
     exit 1
 fi
+
+# ============================================================================
+# Lock File Management & Stuck Task Recovery
+# ============================================================================
+
+# Function to check if a process is still running
+is_process_running() {
+    local pid="$1"
+    if [ -z "$pid" ]; then
+        return 1
+    fi
+    kill -0 "$pid" 2>/dev/null
+}
+
+# Function to create lock file
+create_lock_file() {
+    echo $$ > "$LOCK_FILE"
+    echo -e "${BLUE}Created lock file: $LOCK_FILE (PID: $$)${NC}"
+}
+
+# Function to remove lock file
+cleanup_lock_file() {
+    if [ -f "$LOCK_FILE" ]; then
+        local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+        # Only remove if we own the lock
+        if [ "$lock_pid" = "$$" ]; then
+            rm -f "$LOCK_FILE"
+            echo -e "${BLUE}Removed lock file${NC}"
+        fi
+    fi
+}
+
+# Function to check for concurrent loops
+check_concurrent_loop() {
+    if [ -f "$LOCK_FILE" ]; then
+        local lock_pid=$(cat "$LOCK_FILE" 2>/dev/null)
+        if [ -n "$lock_pid" ] && is_process_running "$lock_pid"; then
+            echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║                   CONCURRENT LOOP DETECTED                     ║${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+            echo ""
+            echo -e "${RED}Another Ralph Wiggum Loop is already running!${NC}"
+            echo -e "${YELLOW}  Lock file: $LOCK_FILE${NC}"
+            echo -e "${YELLOW}  Running PID: $lock_pid${NC}"
+            echo ""
+            echo -e "${YELLOW}If you believe this is an error (e.g., stale lock from a crash),${NC}"
+            echo -e "${YELLOW}you can remove the lock file manually:${NC}"
+            echo -e "${BLUE}  rm \"$LOCK_FILE\"${NC}"
+            echo ""
+            exit 1
+        else
+            # Stale lock file - process is not running
+            echo -e "${YELLOW}Found stale lock file (PID $lock_pid is not running). Removing...${NC}"
+            rm -f "$LOCK_FILE"
+        fi
+    fi
+}
+
+# Function to detect stuck tasks (tasks with in_progress status)
+detect_stuck_tasks() {
+    jq -r '[.tasks[] | select(.status == "in_progress")] | length' "$TODO_FILE"
+}
+
+# Function to get stuck task IDs and names
+get_stuck_tasks_info() {
+    jq -r '.tasks[] | select(.status == "in_progress") | "\(.id): \(.name)"' "$TODO_FILE"
+}
+
+# Function to reset stuck tasks to pending
+reset_stuck_tasks() {
+    local tmp_file=$(mktemp)
+    jq '
+        .tasks = [.tasks[] |
+            if .status == "in_progress" then
+                .status = "pending" |
+                .notes = (if .notes == null or .notes == "" then "Auto-recovered from stuck in_progress state" else .notes + "\nAuto-recovered from stuck in_progress state" end) |
+                .failure_count = (.failure_count + 1)
+            else . end
+        ] |
+        .statistics.pending = ([.tasks[] | select(.status == "pending")] | length) |
+        .statistics.in_progress = ([.tasks[] | select(.status == "in_progress")] | length) |
+        .statistics.passed = ([.tasks[] | select(.status == "passed")] | length) |
+        .statistics.failed = ([.tasks[] | select(.status == "failed")] | length) |
+        .statistics.skipped = ([.tasks[] | select(.status == "skipped")] | length) |
+        .metadata.last_updated = (now | strftime("%Y-%m-%d"))
+    ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
+}
+
+# Function to check for and handle stuck tasks
+handle_stuck_tasks() {
+    local stuck_count=$(detect_stuck_tasks)
+
+    if [ "$stuck_count" -gt 0 ]; then
+        echo -e "${YELLOW}╔════════════════════════════════════════════════════════════════╗${NC}"
+        echo -e "${YELLOW}║                   STUCK TASKS DETECTED                         ║${NC}"
+        echo -e "${YELLOW}╚════════════════════════════════════════════════════════════════╝${NC}"
+        echo ""
+        echo -e "${YELLOW}Found $stuck_count task(s) with 'in_progress' status:${NC}"
+        echo ""
+        get_stuck_tasks_info | while read -r line; do
+            echo -e "  ${BLUE}• $line${NC}"
+        done
+        echo ""
+        echo -e "${YELLOW}This usually happens when a previous loop was interrupted.${NC}"
+        echo -e "${YELLOW}These tasks cannot proceed until they are reset to 'pending'.${NC}"
+        echo ""
+
+        # Ask user for confirmation
+        read -p "Reset stuck tasks to 'pending' status? (y/N): " -n 1 -r
+        echo ""
+
+        if [[ $REPLY =~ ^[Yy]$ ]]; then
+            echo -e "${GREEN}Resetting stuck tasks...${NC}"
+            reset_stuck_tasks
+
+            # Log the recovery
+            local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+            cat >> "$PROGRESS_FILE" << EOF
+
+--------------------------------------------------------------------------------
+Timestamp: $timestamp
+Event: AUTO-RECOVERY
+Summary: Reset $stuck_count stuck task(s) from 'in_progress' to 'pending' status
+Reason: Previous loop was interrupted, leaving tasks in stuck state
+--------------------------------------------------------------------------------
+EOF
+            echo -e "${GREEN}Successfully reset $stuck_count task(s) to pending status.${NC}"
+            echo ""
+        else
+            echo -e "${RED}Cannot proceed with stuck tasks. Exiting.${NC}"
+            echo -e "${YELLOW}To manually fix, edit $TODO_FILE and change 'in_progress' to 'pending'.${NC}"
+            exit 1
+        fi
+    fi
+}
+
+# Set up trap to clean up lock file on exit
+trap cleanup_lock_file EXIT INT TERM
+
+# Check for concurrent loop before proceeding
+check_concurrent_loop
+
+# Check for and handle stuck tasks
+handle_stuck_tasks
+
+# Create lock file for this session
+create_lock_file
 
 # Initialize progress file if it doesn't exist
 if [ ! -f "$PROGRESS_FILE" ]; then
