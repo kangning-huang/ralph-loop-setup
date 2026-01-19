@@ -752,6 +752,8 @@ create_claude_prompt() {
     cat > "$PROMPT_FILE" << EOF
 # ${PROJECT_NAME} - Task Implementation
 
+**IMPORTANT: This is an automated run. Complete the task fully and exit without asking any follow-up questions. Do not ask "Would you like me to proceed?" or similar interactive prompts. Execute all required steps autonomously and terminate when done.**
+
 You are implementing a single task for ${PROJECT_NAME}.
 ${PROJECT_DESC:+
 **Project Description**: $PROJECT_DESC
@@ -849,7 +851,8 @@ Include in the commit message:
 3. **Follow existing code patterns** - maintain consistency
 4. **Keep changes minimal** - only change what's necessary
 5. **Update the todo list and progress.txt** before finishing - this is CRITICAL
-${build_command:+6. **Build must compile** - verify with \`$build_command\`}
+6. **NO FOLLOW-UP QUESTIONS** - This is automated. Do not ask "Would you like me to..." or similar. Complete the task and exit.
+${build_command:+7. **Build must compile** - verify with \`$build_command\`}
 
 ## Reference Files
 
@@ -912,14 +915,14 @@ EOF
     if [ -n "$timeout_cmd" ]; then
         # Use timeout command with tee to capture output while displaying
         if command -v stdbuf &> /dev/null; then
-            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
         else
-            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
         fi
     else
         # Fallback: use background process with manual timeout
         # Use log file directly instead of /tmp
-        claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+        claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
         local claude_pid=$!
 
         local elapsed=0
