@@ -469,10 +469,10 @@ run_claude_with_timeout() {
         # Use timeout command with unbuffered output
         # Using stdbuf if available for line-buffered output
         if command -v stdbuf &> /dev/null; then
-            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" 2>&1 || exit_code=$?
+            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 || exit_code=$?
         else
             # Run directly - output should stream in real-time
-            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" 2>&1 || exit_code=$?
+            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 || exit_code=$?
         fi
     else
         # Fallback: use background process with manual timeout
@@ -484,7 +484,7 @@ run_claude_with_timeout() {
         cat "$fifo_path" &
         local cat_pid=$!
 
-        claude --dangerously-skip-permissions -p "$(cat "$prompt_file")" > "$fifo_path" 2>&1 &
+        claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" > "$fifo_path" 2>&1 &
         local claude_pid=$!
 
         local elapsed=0
