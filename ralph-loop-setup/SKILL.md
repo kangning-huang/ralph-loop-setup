@@ -163,7 +163,40 @@ If the user doesn't have existing files, conduct a discovery interview:
 
 Ask the user where they want to set up the Ralph Loop files. Default to the current working directory.
 
-### Step 4: Create All 3 Files
+### Step 4: Ask About Automated Permissions (Security Consent)
+
+**IMPORTANT**: Before creating the files, you MUST ask the user about automated permissions. The Ralph Wiggum Loop runs Claude autonomously, which means Claude needs to perform file operations without interactive permission prompts.
+
+Use the AskUserQuestion tool to present this consent question:
+
+**"The Ralph Wiggum Loop runs Claude autonomously without user interaction. To work properly, it uses the `--dangerously-skip-permissions` flag, which allows Claude to create, modify, and delete files without asking for permission each time.**
+
+**This is necessary because:**
+- The loop runs non-interactively (output goes to logs, not your terminal)
+- Without this flag, Claude would hang waiting for permission that never comes
+- Autonomous operation is the core value of this tool
+
+**Security implications:**
+- Claude will have unrestricted file access within the working directory
+- You should only run this in project directories you trust
+- Review the todolist.json tasks before running to understand what changes will be made
+
+**Do you consent to running Claude with automated permissions (--dangerously-skip-permissions)?"**
+
+Options:
+1. **Yes, enable automated permissions** - I understand the implications and want autonomous operation (Recommended)
+2. **No, require manual permissions** - I want to approve each file operation manually
+
+**If user selects Option 1 (Yes):**
+- Proceed with creating the files as normal (the script already includes the flag)
+- Note in the setup completion message that automated permissions are enabled
+
+**If user selects Option 2 (No):**
+- Warn the user: "Without automated permissions, the loop will hang when Claude needs to create or modify files. You would need to run Claude interactively instead of using the loop."
+- Ask if they want to proceed anyway or reconsider
+- If they still want to proceed, create a modified version of the script without the `--dangerously-skip-permissions` flag (though this is not recommended)
+
+### Step 5: Create All 3 Files
 
 #### File 1: Create ralph_wiggum_loop.sh
 
@@ -250,7 +283,7 @@ Create the progress log file:
 ================================================================================
 ```
 
-### Step 5: Verify Setup and Provide Instructions
+### Step 6: Verify Setup and Provide Instructions
 
 After creating all files, verify they exist and provide usage instructions:
 
@@ -260,6 +293,10 @@ Setup Complete! Created 3 files:
 1. todolist.json - Your task list with X tasks
 2. progress.txt - Progress log (empty, will be filled as tasks complete)
 3. ralph_wiggum_loop.sh - The automation script
+
+Security Note: Automated permissions (--dangerously-skip-permissions) are ENABLED.
+Claude will create/modify files without asking for permission each time.
+Only run this in project directories you trust.
 
 To run the Ralph Wiggum Loop:
 
@@ -276,7 +313,7 @@ Example - run 5 tasks then stop:
 
 The loop will:
 - Pick the highest-priority pending task
-- Run a fresh Claude session to implement it
+- Run a fresh Claude session to implement it (with automated permissions)
 - Update todolist.json and progress.txt
 - Move to the next task
 - Retry failed tasks up to 5 times
