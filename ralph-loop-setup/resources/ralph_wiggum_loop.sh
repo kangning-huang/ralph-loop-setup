@@ -18,6 +18,11 @@ RETRY_DELAY=5  # Seconds to wait between retry attempts
 EXPONENTIAL_BACKOFF=false  # If true, use exponential backoff (5s, 10s, 15s, etc.)
 LOCK_FILE=""  # Will be set after TODO_FILE is determined
 
+# Health Check Configuration (Issue #22)
+HEALTH_CHECK_INTERVAL=30  # Check log file activity every 30 seconds
+HEALTH_CHECK_INACTIVITY_TIMEOUT=300  # 5 minutes of inactivity before killing hung process
+HEALTH_CHECK_ENABLED=true  # Enable/disable health check monitoring
+
 # Colors for output
 RED='\033[0;31m'
 GREEN='\033[0;32m'
@@ -48,6 +53,11 @@ usage() {
     echo "  -r N                  Short form of --max-retries"
     echo "  --retry-delay SECS    Delay between retry attempts in seconds (default: 5)"
     echo "  --exponential-backoff Use exponential backoff for retries (5s, 10s, 15s, etc.)"
+    echo "  --health-check-interval SECS"
+    echo "                        Health check interval in seconds (default: 30)"
+    echo "  --health-check-timeout SECS"
+    echo "                        Inactivity timeout before killing hung process (default: 300)"
+    echo "  --no-health-check     Disable health check monitoring"
     echo "  --help, -h            Show this help message"
     echo ""
     echo "Examples:"
@@ -121,6 +131,34 @@ while [[ $# -gt 0 ]]; do
             EXPONENTIAL_BACKOFF=true
             shift
             ;;
+        --health-check-interval)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo -e "${RED}Error: --health-check-interval requires a numeric value${NC}"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}Error: --health-check-interval must be a positive integer${NC}"
+                exit 1
+            fi
+            HEALTH_CHECK_INTERVAL="$2"
+            shift 2
+            ;;
+        --health-check-timeout)
+            if [[ -z "$2" || "$2" == -* ]]; then
+                echo -e "${RED}Error: --health-check-timeout requires a numeric value${NC}"
+                exit 1
+            fi
+            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+                echo -e "${RED}Error: --health-check-timeout must be a positive integer${NC}"
+                exit 1
+            fi
+            HEALTH_CHECK_INACTIVITY_TIMEOUT="$2"
+            shift 2
+            ;;
+        --no-health-check)
+            HEALTH_CHECK_ENABLED=false
+            shift
+            ;;
         --help|-h)
             usage
             ;;
@@ -191,6 +229,11 @@ echo "  Max iterations: $MAX_ITERATIONS"
 echo "  Timeout per iteration: $((TIMEOUT_SECONDS / 60)) minutes"
 echo "  Max retries per task: $MAX_RETRIES"
 echo "  Retry delay: ${RETRY_DELAY}s$([ "$EXPONENTIAL_BACKOFF" = true ] && echo " (exponential backoff enabled)")"
+if [ "$HEALTH_CHECK_ENABLED" = true ]; then
+    echo "  Health check: enabled (check every ${HEALTH_CHECK_INTERVAL}s, timeout after ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s of inactivity)"
+else
+    echo "  Health check: disabled"
+fi
 echo "  Todo list: $TODO_FILE"
 echo "  Working directory: $WORKING_DIR"
 echo "  Progress file: $PROGRESS_FILE"
@@ -752,6 +795,8 @@ create_claude_prompt() {
     cat > "$PROMPT_FILE" << EOF
 # ${PROJECT_NAME} - Task Implementation
 
+**IMPORTANT: This is an automated run. Complete the task fully and exit without asking any follow-up questions. Do not ask "Would you like me to proceed?" or similar interactive prompts. Execute all required steps autonomously and terminate when done.**
+
 You are implementing a single task for ${PROJECT_NAME}.
 ${PROJECT_DESC:+
 **Project Description**: $PROJECT_DESC
@@ -849,7 +894,8 @@ Include in the commit message:
 3. **Follow existing code patterns** - maintain consistency
 4. **Keep changes minimal** - only change what's necessary
 5. **Update the todo list and progress.txt** before finishing - this is CRITICAL
-${build_command:+6. **Build must compile** - verify with \`$build_command\`}
+6. **NO FOLLOW-UP QUESTIONS** - This is automated. Do not ask "Would you like me to..." or similar. Complete the task and exit.
+${build_command:+7. **Build must compile** - verify with \`$build_command\`}
 
 ## Reference Files
 
@@ -866,6 +912,199 @@ EOF
 # Global variable to store current log file path
 CURRENT_LOG_FILE=""
 
+# ============================================================================
+# Health Check Monitoring (Issue #22)
+# ============================================================================
+
+# Global variable to track health check monitor PID
+HEALTH_CHECK_PID=""
+
+# Function to start health check monitor as a background process
+# Monitors log file size and kills the process if no activity for too long
+start_health_check_monitor() {
+    local log_file="$1"
+    local claude_pid="$2"
+    local check_interval="${HEALTH_CHECK_INTERVAL:-30}"
+    local inactivity_timeout="${HEALTH_CHECK_INACTIVITY_TIMEOUT:-300}"
+
+    if [ "$HEALTH_CHECK_ENABLED" != true ]; then
+        return 0
+    fi
+
+    # Start background monitor
+    (
+        local last_size=0
+        local last_activity_time=$(date +%s)
+        local status_file="${log_file}.health_status"
+
+        echo "RUNNING" > "$status_file"
+
+        while true; do
+            sleep "$check_interval"
+
+            # Check if Claude process is still running
+            if ! kill -0 "$claude_pid" 2>/dev/null; then
+                rm -f "$status_file"
+                exit 0
+            fi
+
+            # Check log file size
+            local current_size=0
+            if [ -f "$log_file" ]; then
+                current_size=$(stat -c%s "$log_file" 2>/dev/null || stat -f%z "$log_file" 2>/dev/null || echo "0")
+            fi
+
+            local current_time=$(date +%s)
+
+            # Check if there's activity (file size changed)
+            if [ "$current_size" -gt "$last_size" ]; then
+                last_size=$current_size
+                last_activity_time=$current_time
+            else
+                # No activity - check if we've exceeded inactivity timeout
+                local inactive_duration=$((current_time - last_activity_time))
+
+                if [ "$inactive_duration" -ge "$inactivity_timeout" ]; then
+                    echo "HUNG" > "$status_file"
+                    # Process appears hung - kill it
+                    echo -e "\n${RED}[Health Check] Process hung detected! No log activity for ${inactive_duration}s (timeout: ${inactivity_timeout}s)${NC}" >&2
+                    echo -e "${YELLOW}[Health Check] Terminating hung Claude process (PID: $claude_pid)...${NC}" >&2
+
+                    # Add a marker to the log file
+                    echo "" >> "$log_file"
+                    echo "=================================================================================" >> "$log_file"
+                    echo "[HEALTH CHECK] Process terminated due to inactivity (no output for ${inactive_duration}s)" >> "$log_file"
+                    echo "[HEALTH CHECK] Timeout threshold: ${inactivity_timeout}s" >> "$log_file"
+                    echo "[HEALTH CHECK] Termination time: $(date '+%Y-%m-%d %H:%M:%S')" >> "$log_file"
+                    echo "=================================================================================" >> "$log_file"
+
+                    # Graceful termination first
+                    kill -TERM "$claude_pid" 2>/dev/null || true
+                    sleep 3
+                    # Force kill if still running
+                    kill -KILL "$claude_pid" 2>/dev/null || true
+
+                    rm -f "$status_file"
+                    exit 0
+                fi
+            fi
+        done
+    ) &
+
+    HEALTH_CHECK_PID=$!
+}
+
+# Function to stop health check monitor
+stop_health_check_monitor() {
+    local log_file="$1"
+
+    if [ -n "$HEALTH_CHECK_PID" ]; then
+        kill "$HEALTH_CHECK_PID" 2>/dev/null || true
+        wait "$HEALTH_CHECK_PID" 2>/dev/null || true
+        HEALTH_CHECK_PID=""
+    fi
+
+    # Clean up status file
+    if [ -n "$log_file" ]; then
+        rm -f "${log_file}.health_status"
+    fi
+}
+
+# Function to check if process was terminated by health check
+was_killed_by_health_check() {
+    local log_file="$1"
+
+    # Check status file
+    local status_file="${log_file}.health_status"
+    if [ -f "$status_file" ] && [ "$(cat "$status_file" 2>/dev/null)" = "HUNG" ]; then
+        rm -f "$status_file"
+        return 0
+    fi
+
+    # Also check log file for health check marker
+    if [ -f "$log_file" ] && grep -q "\[HEALTH CHECK\] Process terminated due to inactivity" "$log_file" 2>/dev/null; then
+        return 0
+    fi
+
+    return 1
+}
+
+# Function to detect API errors in logs (Issue #22)
+# Returns 0 if API error detected, 1 otherwise
+detect_api_errors() {
+    local log_file="$1"
+    local stderr_log="$2"
+
+    local api_error_patterns=(
+        "No messages returned"
+        "API error"
+        "rate limit"
+        "overloaded"
+        "connection refused"
+        "connection reset"
+        "timeout"
+        "ECONNRESET"
+        "ETIMEDOUT"
+        "socket hang up"
+        "network error"
+        "503 Service"
+        "502 Bad Gateway"
+        "500 Internal Server"
+        "429 Too Many"
+    )
+
+    local error_found=""
+
+    for pattern in "${api_error_patterns[@]}"; do
+        if [ -f "$log_file" ] && grep -qi "$pattern" "$log_file" 2>/dev/null; then
+            error_found="$pattern (in log file)"
+            break
+        fi
+        if [ -f "$stderr_log" ] && grep -qi "$pattern" "$stderr_log" 2>/dev/null; then
+            error_found="$pattern (in stderr)"
+            break
+        fi
+    done
+
+    if [ -n "$error_found" ]; then
+        echo "$error_found"
+        return 0
+    fi
+
+    return 1
+}
+
+# Function to check for empty log output (Issue #22)
+# Returns 0 if log is empty/nearly empty, 1 otherwise
+check_empty_log() {
+    local log_file="$1"
+    local min_content_size=100  # Minimum bytes of actual content expected
+
+    if [ ! -f "$log_file" ]; then
+        return 0  # No log file = empty
+    fi
+
+    local file_size=$(stat -c%s "$log_file" 2>/dev/null || stat -f%z "$log_file" 2>/dev/null || echo "0")
+
+    # Account for the header we add (approximately 400 bytes)
+    local header_size=400
+    local content_size=$((file_size - header_size))
+
+    if [ "$content_size" -lt "$min_content_size" ]; then
+        return 0  # Log is effectively empty
+    fi
+
+    # Additional check: look for actual Claude output content
+    # The log should contain more than just our headers and footers
+    local meaningful_lines=$(grep -v "^===\|^Ralph Wiggum\|^Task ID:\|^Attempt:\|^Timestamp:\|^Timeout:\|^Working Directory:\|^Execution completed\|^Exit code:\|^$" "$log_file" 2>/dev/null | wc -l | tr -d ' ')
+
+    if [ "$meaningful_lines" -lt 5 ]; then
+        return 0  # Not enough meaningful content
+    fi
+
+    return 1  # Log has content
+}
+
 # Function to run Claude with timeout
 run_claude_with_timeout() {
     local prompt_file="$1"
@@ -877,9 +1116,13 @@ run_claude_with_timeout() {
     local log_file="${LOG_DIR}/${task_id}_${timestamp}_attempt${attempt_num}.log"
     local stderr_log="${LOG_DIR}/${task_id}_${timestamp}_attempt${attempt_num}_stderr.log"
     CURRENT_LOG_FILE="$log_file"
+    CURRENT_STDERR_LOG="$stderr_log"
 
     echo -e "${BLUE}Running Claude CLI...${NC}"
     echo -e "${BLUE}Log file: $log_file${NC}"
+    if [ "$HEALTH_CHECK_ENABLED" = true ]; then
+        echo -e "${BLUE}Health check: enabled (interval: ${HEALTH_CHECK_INTERVAL}s, inactivity timeout: ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s)${NC}"
+    fi
     echo -e "${BLUE}────────────────────────────────────────────────────────────────${NC}"
 
     # Write log header
@@ -891,6 +1134,7 @@ Task ID: $task_id
 Attempt: $attempt_num
 Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
 Timeout: ${TIMEOUT_SECONDS}s
+Health Check: $([ "$HEALTH_CHECK_ENABLED" = true ] && echo "enabled (${HEALTH_CHECK_INTERVAL}s interval, ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s inactivity timeout)" || echo "disabled")
 Working Directory: $WORKING_DIR
 ================================================================================
 
@@ -905,22 +1149,54 @@ EOF
     fi
 
     local exit_code=0
+    local was_hung=false
+    local api_error=""
 
     # Change to working directory for Claude execution
     pushd "$WORKING_DIR" > /dev/null
 
     if [ -n "$timeout_cmd" ]; then
         # Use timeout command with tee to capture output while displaying
-        if command -v stdbuf &> /dev/null; then
-            stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+        # For health check with timeout command, we need to run in background to get PID
+        if [ "$HEALTH_CHECK_ENABLED" = true ]; then
+            # Run with health check monitoring
+            if command -v stdbuf &> /dev/null; then
+                stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+            else
+                $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+            fi
+            local claude_pid=$!
+
+            # Start health check monitor
+            start_health_check_monitor "$log_file" "$claude_pid"
+
+            # Wait for completion
+            wait $claude_pid || exit_code=$?
+
+            # Stop health check monitor
+            stop_health_check_monitor "$log_file"
+
+            # Check if killed by health check
+            if was_killed_by_health_check "$log_file"; then
+                was_hung=true
+                exit_code=125  # Custom exit code for health check termination
+            fi
         else
-            $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+            # Run without health check (original behavior)
+            if command -v stdbuf &> /dev/null; then
+                stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+            else
+                $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+            fi
         fi
     else
         # Fallback: use background process with manual timeout
         # Use log file directly instead of /tmp
-        claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+        claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
         local claude_pid=$!
+
+        # Start health check monitor
+        start_health_check_monitor "$log_file" "$claude_pid"
 
         local elapsed=0
         while kill -0 $claude_pid 2>/dev/null; do
@@ -934,19 +1210,68 @@ EOF
                 exit_code=124  # Timeout exit code
                 break
             fi
+
+            # Check if health check killed the process
+            if was_killed_by_health_check "$log_file"; then
+                was_hung=true
+                exit_code=125  # Custom exit code for health check termination
+                break
+            fi
         done
 
-        if [ $exit_code -eq 0 ]; then
+        if [ $exit_code -eq 0 ] && [ "$was_hung" != true ]; then
             wait $claude_pid || exit_code=$?
+        fi
+
+        # Stop health check monitor
+        stop_health_check_monitor "$log_file"
+    fi
+
+    # Post-execution checks (Issue #22)
+
+    # Check for empty log (process exited with 0 but no output)
+    if [ $exit_code -eq 0 ] && check_empty_log "$log_file"; then
+        echo -e "${RED}[Issue #22] Empty log detected! Process exited successfully but produced no output.${NC}"
+        echo "" >> "$log_file"
+        echo "=================================================================================" >> "$log_file"
+        echo "[EMPTY LOG DETECTION] Process exited with code 0 but produced no meaningful output" >> "$log_file"
+        echo "[EMPTY LOG DETECTION] This is treated as a failure - triggering retry logic" >> "$log_file"
+        echo "=================================================================================" >> "$log_file"
+        exit_code=126  # Custom exit code for empty log
+    fi
+
+    # Check for API errors in logs
+    api_error=$(detect_api_errors "$log_file" "$stderr_log" || echo "")
+    if [ -n "$api_error" ]; then
+        echo -e "${RED}[Issue #22] API error detected: $api_error${NC}"
+        echo "" >> "$log_file"
+        echo "=================================================================================" >> "$log_file"
+        echo "[API ERROR DETECTION] API error detected: $api_error" >> "$log_file"
+        echo "[API ERROR DETECTION] This is treated as a failure - triggering retry logic" >> "$log_file"
+        echo "=================================================================================" >> "$log_file"
+        # Force failure status even if exit code was 0
+        if [ $exit_code -eq 0 ]; then
+            exit_code=127  # Custom exit code for API error
         fi
     fi
 
     # Append footer to log file
+    local status_msg="Exit code: $exit_code"
+    if [ "$was_hung" = true ]; then
+        status_msg="$status_msg (HUNG - killed by health check)"
+    elif [ $exit_code -eq 124 ]; then
+        status_msg="$status_msg (TIMEOUT)"
+    elif [ $exit_code -eq 126 ]; then
+        status_msg="$status_msg (EMPTY LOG)"
+    elif [ $exit_code -eq 127 ] || [ -n "$api_error" ]; then
+        status_msg="$status_msg (API ERROR: $api_error)"
+    fi
+
     cat >> "$log_file" << EOF
 
 ================================================================================
 Execution completed at: $(date '+%Y-%m-%d %H:%M:%S')
-Exit code: $exit_code
+$status_msg
 ================================================================================
 EOF
 
@@ -963,6 +1288,9 @@ EOF
 
     return $exit_code
 }
+
+# Global variable for stderr log path
+CURRENT_STDERR_LOG=""
 
 # Function to handle timeout - ensure todo list and progress.txt are updated
 handle_timeout() {
@@ -981,6 +1309,64 @@ handle_timeout() {
         "Task may be too complex for single iteration. Consider breaking into smaller sub-tasks."
 
     echo -e "${YELLOW}Timeout handled. Progress updated.${NC}"
+}
+
+# Function to handle hung process (Issue #22)
+handle_hung_process() {
+    local task_id="$1"
+
+    echo -e "${RED}Handling hung process for task $task_id...${NC}"
+
+    # Update todo list to mark as pending (will retry)
+    update_task_status "$task_id" "pending" "Process hung - no log activity for ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s (Issue #22)"
+    increment_failure_count "$task_id"
+
+    # Log progress
+    log_progress "$task_id" "HUNG" \
+        "Process hung due to inactivity (no output for ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s)" \
+        "Health check detected process was stuck with no log activity" \
+        "Possible API hang or network issue. Process terminated by health check monitor."
+
+    echo -e "${RED}Hung process handled. Task will be retried.${NC}"
+}
+
+# Function to handle empty log (Issue #22)
+handle_empty_log() {
+    local task_id="$1"
+
+    echo -e "${RED}Handling empty log for task $task_id...${NC}"
+
+    # Update todo list to mark as pending (will retry)
+    update_task_status "$task_id" "pending" "Empty log detected - process produced no output (Issue #22)"
+    increment_failure_count "$task_id"
+
+    # Log progress
+    log_progress "$task_id" "EMPTY_LOG" \
+        "Process exited with code 0 but produced no meaningful output" \
+        "Claude API may have returned empty response or failed silently" \
+        "This often indicates API issues. Will retry with next attempt."
+
+    echo -e "${RED}Empty log handled. Task will be retried.${NC}"
+}
+
+# Function to handle API error (Issue #22)
+handle_api_error() {
+    local task_id="$1"
+    local error_msg="$2"
+
+    echo -e "${RED}Handling API error for task $task_id: $error_msg${NC}"
+
+    # Update todo list to mark as pending (will retry)
+    update_task_status "$task_id" "pending" "API error: $error_msg (Issue #22)"
+    increment_failure_count "$task_id"
+
+    # Log progress
+    log_progress "$task_id" "API_ERROR" \
+        "Claude API returned an error: $error_msg" \
+        "$error_msg" \
+        "API errors are usually transient. Will retry after delay."
+
+    echo -e "${RED}API error handled. Task will be retried.${NC}"
 }
 
 # Main loop
@@ -1063,49 +1449,91 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
             break
         else
             last_exit_code=$?
-            if [ $last_exit_code -eq 124 ]; then
-                # Timeout - don't retry timeouts, they take too long
-                echo -e "${RED}Task timed out on attempt $attempt. Not retrying timeouts.${NC}"
-                handle_timeout "$task_id"
-                break
-            else
-                echo -e "${RED}Claude exited with code $last_exit_code on attempt $attempt${NC}"
-                # Check if Claude updated the status to passed
-                current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
-                if [ "$current_status" = "passed" ]; then
-                    echo -e "${GREEN}Task was marked as passed despite exit code.${NC}"
-                    task_succeeded=true
-                    break
-                fi
 
-                # Issue #18: Validate task completion by checking acceptance criteria
-                echo -e "${BLUE}Performing artifact validation (Issue #18 enhancement)...${NC}"
-                if check_task_artifacts "$task_id"; then
-                    echo -e "${GREEN}Artifact validation passed! Task appears to have completed successfully.${NC}"
-                    # Update task status to passed if artifacts indicate success
-                    if [ "$current_status" != "passed" ]; then
-                        update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code"
-                        log_progress "$task_id" "PASSED (auto-validated)" \
-                            "Task completed successfully (validated by artifact check)" \
-                            "" \
-                            "Exit code was $last_exit_code but artifact validation score was $ARTIFACT_PERCENTAGE%"
+            # Handle different exit codes (Issue #22 enhancements)
+            case $last_exit_code in
+                124)
+                    # Timeout - don't retry timeouts, they take too long
+                    echo -e "${RED}Task timed out on attempt $attempt. Not retrying timeouts.${NC}"
+                    handle_timeout "$task_id"
+                    break
+                    ;;
+                125)
+                    # Hung process detected by health check - will retry
+                    echo -e "${RED}Task hung on attempt $attempt (health check detected no activity).${NC}"
+                    if [ $attempt -ge $MAX_RETRIES ]; then
+                        handle_hung_process "$task_id"
+                        break
+                    else
+                        echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
+                        update_task_status "$task_id" "in_progress" "Retry after hung process (attempt $((attempt + 1)))"
                     fi
-                    task_succeeded=true
-                    break
-                fi
+                    ;;
+                126)
+                    # Empty log detected - will retry
+                    echo -e "${RED}Empty log detected on attempt $attempt.${NC}"
+                    if [ $attempt -ge $MAX_RETRIES ]; then
+                        handle_empty_log "$task_id"
+                        break
+                    else
+                        echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
+                        update_task_status "$task_id" "in_progress" "Retry after empty log (attempt $((attempt + 1)))"
+                    fi
+                    ;;
+                127)
+                    # API error detected - will retry
+                    echo -e "${RED}API error detected on attempt $attempt.${NC}"
+                    if [ $attempt -ge $MAX_RETRIES ]; then
+                        # Get the API error message from log
+                        local api_err_msg=$(grep -o "\[API ERROR DETECTION\] API error detected: .*" "$CURRENT_LOG_FILE" 2>/dev/null | head -1 | sed 's/\[API ERROR DETECTION\] API error detected: //')
+                        handle_api_error "$task_id" "${api_err_msg:-Unknown API error}"
+                        break
+                    else
+                        echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
+                        update_task_status "$task_id" "in_progress" "Retry after API error (attempt $((attempt + 1)))"
+                    fi
+                    ;;
+                *)
+                    # Other exit codes - existing logic
+                    echo -e "${RED}Claude exited with code $last_exit_code on attempt $attempt${NC}"
+                    # Check if Claude updated the status to passed
+                    current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+                    if [ "$current_status" = "passed" ]; then
+                        echo -e "${GREEN}Task was marked as passed despite exit code.${NC}"
+                        task_succeeded=true
+                        break
+                    fi
 
-                if [ $attempt -lt $MAX_RETRIES ]; then
-                    echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                    # Reset status back to in_progress for retry
-                    update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))"
-                fi
-            fi
+                    # Issue #18: Validate task completion by checking acceptance criteria
+                    echo -e "${BLUE}Performing artifact validation (Issue #18 enhancement)...${NC}"
+                    if check_task_artifacts "$task_id"; then
+                        echo -e "${GREEN}Artifact validation passed! Task appears to have completed successfully.${NC}"
+                        # Update task status to passed if artifacts indicate success
+                        if [ "$current_status" != "passed" ]; then
+                            update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code"
+                            log_progress "$task_id" "PASSED (auto-validated)" \
+                                "Task completed successfully (validated by artifact check)" \
+                                "" \
+                                "Exit code was $last_exit_code but artifact validation score was $ARTIFACT_PERCENTAGE%"
+                        fi
+                        task_succeeded=true
+                        break
+                    fi
+
+                    if [ $attempt -lt $MAX_RETRIES ]; then
+                        echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
+                        # Reset status back to in_progress for retry
+                        update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))"
+                    fi
+                    ;;
+            esac
         fi
         attempt=$((attempt + 1))
     done
 
     # Handle final failure after all retries exhausted
-    if [ "$task_succeeded" = false ] && [ $last_exit_code -ne 124 ]; then
+    # Skip if already handled by timeout (124), hung (125), empty log (126), or API error (127)
+    if [ "$task_succeeded" = false ] && [ $last_exit_code -ne 124 ] && [ $last_exit_code -ne 125 ] && [ $last_exit_code -ne 126 ] && [ $last_exit_code -ne 127 ]; then
         current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
         if [ "$current_status" = "in_progress" ]; then
             # Final artifact validation check before marking as failed (Issue #18)
