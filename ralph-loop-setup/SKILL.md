@@ -218,7 +218,8 @@ Create a customized version with the user's tasks:
     "pending": N,
     "in_progress": 0,
     "passed": 0,
-    "failed": 0
+    "failed": 0,
+    "skipped": 0
   }
 }
 ```
