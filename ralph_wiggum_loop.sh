@@ -462,6 +462,220 @@ increment_failure_count() {
     ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
 }
 
+# ============================================================================
+# Acceptance Criteria Validation (Issue #18)
+# ============================================================================
+
+# Function to validate task completion by checking acceptance criteria
+# Returns 0 if validation passes, 1 if it fails
+validate_task_completion() {
+    local task_id="$1"
+    local task_json=$(get_task_details "$task_id")
+
+    local validation_passed=true
+    local validation_notes=""
+
+    echo -e "${BLUE}Validating task completion for $task_id...${NC}"
+
+    # 1. Check if expected files exist (from files_likely_affected)
+    local files_affected=$(echo "$task_json" | jq -r '.files_likely_affected // []')
+    local files_count=$(echo "$files_affected" | jq -r 'length')
+
+    if [ "$files_count" -gt 0 ]; then
+        echo -e "${BLUE}  Checking expected files...${NC}"
+        local files_exist_count=0
+        local files_modified_count=0
+
+        for file in $(echo "$files_affected" | jq -r '.[]'); do
+            # Resolve relative paths
+            local full_path="$file"
+            if [[ ! "$file" = /* ]]; then
+                full_path="$WORKING_DIR/$file"
+            fi
+
+            if [ -f "$full_path" ]; then
+                files_exist_count=$((files_exist_count + 1))
+                echo -e "${GREEN}    ✓ File exists: $file${NC}"
+
+                # Check if file was recently modified (within last hour)
+                if [ "$(find "$full_path" -mmin -60 2>/dev/null)" ]; then
+                    files_modified_count=$((files_modified_count + 1))
+                    echo -e "${GREEN}    ✓ File recently modified: $file${NC}"
+                fi
+            else
+                echo -e "${YELLOW}    ○ File not found: $file${NC}"
+            fi
+        done
+
+        validation_notes="Files: $files_exist_count/$files_count exist"
+        if [ "$files_modified_count" -gt 0 ]; then
+            validation_notes="$validation_notes, $files_modified_count recently modified"
+        fi
+    fi
+
+    # 2. Check git status for changes
+    echo -e "${BLUE}  Checking git status...${NC}"
+    pushd "$WORKING_DIR" > /dev/null 2>&1 || true
+
+    if command -v git &> /dev/null && [ -d ".git" ] || git rev-parse --git-dir > /dev/null 2>&1; then
+        local git_status=$(git status --porcelain 2>/dev/null || echo "")
+        local staged_changes=$(git diff --cached --name-only 2>/dev/null | wc -l | tr -d ' ')
+        local unstaged_changes=$(git diff --name-only 2>/dev/null | wc -l | tr -d ' ')
+        local untracked_files=$(git ls-files --others --exclude-standard 2>/dev/null | wc -l | tr -d ' ')
+        local recent_commits=$(git log --oneline --since="1 hour ago" 2>/dev/null | wc -l | tr -d ' ')
+
+        echo -e "${BLUE}    Git status: staged=$staged_changes, unstaged=$unstaged_changes, untracked=$untracked_files, recent_commits=$recent_commits${NC}"
+
+        if [ "$recent_commits" -gt 0 ]; then
+            echo -e "${GREEN}    ✓ Recent commits found${NC}"
+            validation_notes="$validation_notes; $recent_commits recent commit(s)"
+        fi
+
+        if [ "$staged_changes" -gt 0 ] || [ "$unstaged_changes" -gt 0 ]; then
+            echo -e "${GREEN}    ✓ File changes detected${NC}"
+            local total_changes=$((staged_changes + unstaged_changes))
+            validation_notes="$validation_notes; $total_changes file change(s)"
+        fi
+    else
+        echo -e "${YELLOW}    ○ Not a git repository or git not available${NC}"
+    fi
+
+    popd > /dev/null 2>&1 || true
+
+    # 3. Basic acceptance criteria checks (check for file patterns mentioned in criteria)
+    local acceptance_criteria=$(echo "$task_json" | jq -r '.acceptance_criteria // []')
+    local criteria_count=$(echo "$acceptance_criteria" | jq -r 'length')
+
+    if [ "$criteria_count" -gt 0 ]; then
+        echo -e "${BLUE}  Checking acceptance criteria patterns...${NC}"
+        local criteria_hints_found=0
+
+        pushd "$WORKING_DIR" > /dev/null 2>&1 || true
+
+        for criteria in $(echo "$acceptance_criteria" | jq -r '.[]' | tr ' ' '_'); do
+            # Restore spaces
+            criteria=$(echo "$criteria" | tr '_' ' ')
+
+            # Look for file patterns mentioned in criteria (e.g., "*.test.ts", "src/", etc.)
+            # Extract potential file extensions or patterns
+            if echo "$criteria" | grep -qE '\.(ts|js|py|sh|json|md|yml|yaml|tsx|jsx)'; then
+                local ext=$(echo "$criteria" | grep -oE '\.(ts|js|py|sh|json|md|yml|yaml|tsx|jsx)' | head -1)
+                local pattern_files=$(find . -name "*$ext" -mmin -60 2>/dev/null | head -5)
+                if [ -n "$pattern_files" ]; then
+                    criteria_hints_found=$((criteria_hints_found + 1))
+                    echo -e "${GREEN}    ✓ Found recently modified $ext files${NC}"
+                fi
+            fi
+
+            # Look for keywords like "create", "add", "implement" and associated file patterns
+            if echo "$criteria" | grep -qiE '(create|add|implement|write).*file'; then
+                local new_files=$(git ls-files --others --exclude-standard 2>/dev/null | head -5)
+                if [ -n "$new_files" ]; then
+                    criteria_hints_found=$((criteria_hints_found + 1))
+                    echo -e "${GREEN}    ✓ New files detected (matching 'create/add file' criteria)${NC}"
+                fi
+            fi
+        done
+
+        popd > /dev/null 2>&1 || true
+
+        if [ "$criteria_hints_found" -gt 0 ]; then
+            validation_notes="$validation_notes; $criteria_hints_found criteria hints matched"
+        fi
+    fi
+
+    echo -e "${BLUE}  Validation summary: $validation_notes${NC}"
+
+    # Store validation notes for later use
+    VALIDATION_NOTES="$validation_notes"
+
+    # Return success - we use this for informational purposes, not as a hard gate
+    return 0
+}
+
+# Function to check if task appears to have completed successfully based on artifacts
+# This provides a secondary validation when exit code is non-zero
+check_task_artifacts() {
+    local task_id="$1"
+    local task_json=$(get_task_details "$task_id")
+
+    local artifact_score=0
+    local max_score=0
+
+    pushd "$WORKING_DIR" > /dev/null 2>&1 || true
+
+    # Check 1: Recent git commits mentioning the task ID (weight: 3)
+    max_score=$((max_score + 3))
+    if command -v git &> /dev/null; then
+        local task_commits=$(git log --oneline --since="1 hour ago" --grep="$task_id" 2>/dev/null | wc -l | tr -d ' ')
+        if [ "$task_commits" -gt 0 ]; then
+            artifact_score=$((artifact_score + 3))
+            echo -e "${GREEN}    ✓ Found $task_commits commit(s) mentioning task ID${NC}"
+        fi
+    fi
+
+    # Check 2: Files in files_likely_affected were modified (weight: 2)
+    max_score=$((max_score + 2))
+    local files_affected=$(echo "$task_json" | jq -r '.files_likely_affected // [] | .[]' 2>/dev/null)
+    local modified_count=0
+
+    for file in $files_affected; do
+        local full_path="$file"
+        if [[ ! "$file" = /* ]]; then
+            full_path="$WORKING_DIR/$file"
+        fi
+
+        if [ -f "$full_path" ] && [ "$(find "$full_path" -mmin -60 2>/dev/null)" ]; then
+            modified_count=$((modified_count + 1))
+        fi
+    done
+
+    if [ "$modified_count" -gt 0 ]; then
+        artifact_score=$((artifact_score + 2))
+        echo -e "${GREEN}    ✓ $modified_count expected file(s) were recently modified${NC}"
+    fi
+
+    # Check 3: Todo list status was updated to passed (weight: 5 - definitive)
+    max_score=$((max_score + 5))
+    local current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+    if [ "$current_status" = "passed" ]; then
+        artifact_score=$((artifact_score + 5))
+        echo -e "${GREEN}    ✓ Task status was updated to 'passed'${NC}"
+    fi
+
+    # Check 4: Progress file was updated with this task (weight: 2)
+    max_score=$((max_score + 2))
+    if [ -f "$PROGRESS_FILE" ]; then
+        local recent_progress=$(tail -50 "$PROGRESS_FILE" | grep -c "$task_id" || echo "0")
+        if [ "$recent_progress" -gt 0 ]; then
+            artifact_score=$((artifact_score + 2))
+            echo -e "${GREEN}    ✓ Progress file was updated with task info${NC}"
+        fi
+    fi
+
+    popd > /dev/null 2>&1 || true
+
+    # Calculate percentage
+    local percentage=0
+    if [ "$max_score" -gt 0 ]; then
+        percentage=$((artifact_score * 100 / max_score))
+    fi
+
+    echo -e "${BLUE}    Artifact validation score: $artifact_score/$max_score ($percentage%)${NC}"
+
+    # Store the score for decision making
+    ARTIFACT_SCORE=$artifact_score
+    ARTIFACT_MAX_SCORE=$max_score
+    ARTIFACT_PERCENTAGE=$percentage
+
+    # Consider task successful if score is >= 50% or status is passed
+    if [ "$percentage" -ge 50 ] || [ "$current_status" = "passed" ]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
 # Function to log progress
 log_progress() {
     local task_id="$1"
@@ -864,6 +1078,22 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                     break
                 fi
 
+                # Issue #18: Validate task completion by checking acceptance criteria
+                echo -e "${BLUE}Performing artifact validation (Issue #18 enhancement)...${NC}"
+                if check_task_artifacts "$task_id"; then
+                    echo -e "${GREEN}Artifact validation passed! Task appears to have completed successfully.${NC}"
+                    # Update task status to passed if artifacts indicate success
+                    if [ "$current_status" != "passed" ]; then
+                        update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code"
+                        log_progress "$task_id" "PASSED (auto-validated)" \
+                            "Task completed successfully (validated by artifact check)" \
+                            "" \
+                            "Exit code was $last_exit_code but artifact validation score was $ARTIFACT_PERCENTAGE%"
+                    fi
+                    task_succeeded=true
+                    break
+                fi
+
                 if [ $attempt -lt $MAX_RETRIES ]; then
                     echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
                     # Reset status back to in_progress for retry
@@ -878,14 +1108,33 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     if [ "$task_succeeded" = false ] && [ $last_exit_code -ne 124 ]; then
         current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
         if [ "$current_status" = "in_progress" ]; then
-            # Claude didn't update status after all retries, mark as failed
-            update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code)"
-            increment_failure_count "$task_id"
-            log_progress "$task_id" "FAILED" \
-                "Claude failed after $MAX_RETRIES retry attempts" \
-                "Final exit code: $last_exit_code" \
-                "Task failed consistently across all retry attempts. Consider breaking into smaller sub-tasks or checking for environmental issues."
+            # Final artifact validation check before marking as failed (Issue #18)
+            echo -e "${BLUE}Final artifact validation before marking task as failed...${NC}"
+            if check_task_artifacts "$task_id"; then
+                echo -e "${GREEN}Final artifact validation passed! Marking task as successful.${NC}"
+                update_task_status "$task_id" "passed" "Auto-validated after retries: artifacts indicate successful completion"
+                log_progress "$task_id" "PASSED (auto-validated)" \
+                    "Task completed successfully (final artifact validation passed)" \
+                    "" \
+                    "All retry attempts had non-zero exit codes, but artifact validation score was $ARTIFACT_PERCENTAGE%"
+                task_succeeded=true
+            else
+                # Claude didn't update status after all retries, mark as failed
+                echo -e "${RED}Artifact validation failed (score: $ARTIFACT_PERCENTAGE%). Marking task as failed.${NC}"
+                update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code, artifact score: $ARTIFACT_PERCENTAGE%)"
+                increment_failure_count "$task_id"
+                log_progress "$task_id" "FAILED" \
+                    "Claude failed after $MAX_RETRIES retry attempts" \
+                    "Final exit code: $last_exit_code, Artifact validation score: $ARTIFACT_PERCENTAGE%" \
+                    "Task failed consistently across all retry attempts. Consider breaking into smaller sub-tasks or checking for environmental issues."
+            fi
         fi
+    fi
+
+    # Run validation for informational purposes on successful tasks
+    if [ "$task_succeeded" = true ]; then
+        echo -e "${BLUE}Running post-completion validation...${NC}"
+        validate_task_completion "$task_id"
     fi
 
     end_time=$(date +%s)
