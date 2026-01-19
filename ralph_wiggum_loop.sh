@@ -326,9 +326,15 @@ create_claude_prompt() {
     local extra_instructions=$(jq -r '.metadata.extra_instructions // ""' "$TODO_FILE")
 
     # Get previous lessons from progress.txt for this task
+    # Uses awk to find the most recent entry for this task and extract its lessons
     local prev_lessons=""
     if [ -f "$PROGRESS_FILE" ] && [ "$failure_count" -gt 0 ]; then
-        prev_lessons=$(grep -A 20 "Task ID: $task_id" "$PROGRESS_FILE" | grep -A 1 "Lessons Learned:" | tail -n 1 || echo "")
+        prev_lessons=$(awk -v taskid="$task_id" '
+            /^Task ID:/ && index($0, taskid) { in_task=1; lesson="" }
+            in_task && /^Lessons Learned:/ { sub(/^Lessons Learned: */, ""); lesson=$0 }
+            in_task && /^----------------/ { in_task=0 }
+            END { print lesson }
+        ' "$PROGRESS_FILE" 2>/dev/null || echo "")
     fi
 
     cat > "$PROMPT_FILE" << EOF
