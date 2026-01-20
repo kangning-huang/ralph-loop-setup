@@ -1,11 +1,13 @@
 ---
 name: ralph-loop-setup
-description: Set up or update automated task implementation system with Ralph Wiggum Loop. Use when the user wants to create or update todolist.json, progress.txt, and ralph_wiggum_loop.sh files for automated task-based development.
+description: Set up or update automated task implementation system with Ralph Wiggum Loop. Use when the user wants to create or update todolist.json, progress.txt, and ralph_wiggum_loop.sh files for automated AI-driven task-based development.
 ---
 
 # Ralph Loop Setup Skill
 
-You are helping the user set up or update the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to work through a project todo list.
+You are helping the user set up or update the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to intelligently work through a project todo list.
+
+**Key Feature**: Rather than strictly following priority order, Claude analyzes the full todo list and uses AI judgment to select the most impactful task based on strategic value, dependencies, likelihood of success, and logical ordering.
 
 **Important**: This skill sets up the files. It does not run the loop itself. After setup, the user runs the loop separately.
 
@@ -312,10 +314,11 @@ Example - run 5 tasks then stop:
    ./ralph_wiggum_loop.sh -m 5
 
 The loop will:
-- Pick the highest-priority pending task
-- Run a fresh Claude session to implement it (with automated permissions)
+- Let Claude intelligently select the best task (not just by priority number)
+- Consider: strategic impact, dependencies, failure history, complexity
+- Run a fresh Claude session to implement the selected task (with automated permissions)
 - Update todolist.json and progress.txt
-- Move to the next task
+- Move to the next iteration
 - Retry failed tasks up to 5 times
 ```
 

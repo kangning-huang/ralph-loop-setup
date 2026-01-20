@@ -2,22 +2,25 @@
 
 ## Important Reminders
 
-### Keep Skill File in Sync
+### Keep Skill Files in Sync
 
-**CRITICAL**: Whenever you modify `ralph_wiggum_loop.sh`, you MUST also update `ralph-loop-setup.skill` to reflect the same changes.
+**CRITICAL**: Whenever you modify `ralph_wiggum_loop.sh`, you MUST also update ALL skill files to reflect the same changes.
 
-The skill file contains a template version of the script that gets generated when users set up new projects. If these files get out of sync, new projects will have outdated/different behavior than the main script.
+The skill files contain template versions of the script that get generated when users set up new projects. If these files get out of sync, new projects will have outdated/different behavior than the main script.
 
-Files to keep in sync:
-- `ralph_wiggum_loop.sh` - The main orchestration script
-- `ralph-loop-setup.skill` - The skill template (contains embedded script)
+**Files to keep in sync:**
+- `ralph_wiggum_loop.sh` - The main orchestration script (SOURCE OF TRUTH)
+- `ralph-loop-setup.skill` - Root-level skill template (contains embedded script)
+- `ralph-loop-setup/resources/ralph_wiggum_loop.sh` - Marketplace plugin script template
+- `ralph-loop-setup/SKILL.md` - Marketplace plugin skill definition
 
-### What to Update in the Skill File
+### What to Update
 
-When modifying the main script, update the corresponding sections in the skill file:
-1. The embedded bash script template (inside the ```bash code block)
-2. The description/documentation if behavior changes
-3. The "Verify and Provide Instructions" section if new options are added
+When modifying the main script:
+1. Copy `ralph_wiggum_loop.sh` to `ralph-loop-setup/resources/ralph_wiggum_loop.sh`
+2. Update the embedded bash script in `ralph-loop-setup.skill`
+3. Update descriptions in `ralph-loop-setup/SKILL.md` if behavior changes
+4. Update the "Verify and Provide Instructions" sections if new options are added
 
 ## Project Overview
 
