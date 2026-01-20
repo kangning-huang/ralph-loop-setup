@@ -54,6 +54,36 @@ Ralph Loop solves this by running **each task in a fresh Claude Code session**:
 
 ## Installation
 
+### Option 1: Quick Install (Download Skill File)
+
+The simplest way to use Ralph Loop is to download the skill file directly to your project:
+
+```bash
+# Download the skill file to your project root
+curl -o SKILL.md https://raw.githubusercontent.com/kangning-huang/ralph_wiggum_loop/main/ralph-loop-setup/SKILL.md
+```
+
+Then in Claude Code, invoke it using the `@` syntax:
+
+```
+@SKILL.md set up Ralph Loop for my project
+```
+
+Claude will read the skill instructions and guide you through the setup process interactively.
+
+**Tip**: You can also save it to a `.claude/skills/` directory to keep your project root clean:
+```bash
+mkdir -p .claude/skills
+curl -o .claude/skills/ralph-loop-setup.md https://raw.githubusercontent.com/kangning-huang/ralph_wiggum_loop/main/ralph-loop-setup/SKILL.md
+```
+
+Then invoke with:
+```
+@.claude/skills/ralph-loop-setup.md set up Ralph Loop
+```
+
+### Option 2: Plugin Marketplace (Claude Code)
+
 Install through Claude Code in two steps:
 
 **Step 1: Add the marketplace**
@@ -126,8 +156,12 @@ Usage: Type `@ralph-loop-setup` in Cascade or describe your task.
 
 ### Step 1: Run the Setup Skill
 
-In Claude Code, type:
+**If you installed via Option 1 (skill file download):**
+```
+@SKILL.md set up Ralph Loop for my project
+```
 
+**If you installed via Option 2 (plugin marketplace):**
 ```
 /ralph-loop-setup
 ```
