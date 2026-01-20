@@ -52,6 +52,82 @@ Ralph Loop solves this by running **each task in a fresh Claude Code session**:
 
 ---
 
+## Why This Is Better For Your Brain
+
+Most discussions focus on why Ralph Loop improves *AI's* efficiency. But here's what almost nobody talks about: **it also improves *your* efficiency as a human.**
+
+### The Hidden Trap of Synchronous AI Collaboration
+
+When you work with AI in real-time, here's what actually happens:
+
+You ask AI to refactor a module. It starts running. You wait. Five minutes pass. You think "might as well do something useful," so you jump to another project. Two minutes later, the first AI throws an error—needs your intervention. You switch back, spend time rebuilding mental context, make a decision. AI starts running again. You wait. You switch to a third project...
+
+By the end of the day, you feel like you've been "working" nonstop—but you never actually thought deeply about anything. Your brain spent the whole day oscillating between "about to enter deep thought" and "interrupted."
+
+**This isn't AI's fault. It isn't your fault either. It's a structural flaw in synchronous collaboration:** human cognitive rhythms and AI execution rhythms are fundamentally mismatched.
+
+### The Cognitive Science
+
+The research data on this kind of task-bouncing is brutal:
+
+| Finding | Impact |
+|---------|--------|
+| Each task switch costs **20% of cognitive capacity** | Your thinking power drains with every interruption |
+| It takes **23 minutes** to regain focus after interruption | Most AI tasks complete faster than your recovery time |
+| Multitasking consumes **40% of work hours** | Nearly half your day lost to switching overhead |
+| Multitaskers make **50% more errors** | Quality suffers alongside productivity |
+| A mere **5-second interruption** triples error rate | Even brief AI check-ins are costly |
+| Knowledge workers switch apps **1,200+ times/day** | ~4 hours/week wasted on switching alone |
+
+**Working memory is limited to 3–4 items**—not the "magical seven" we once believed. Traditional AI collaboration forces you to simultaneously track: Project A is on step 5, Project B just threw an error, Project C needs a decision... Your working memory fills up fast.
+
+**Only 22% of knowledge workers** manage more than 2 hours of deep work per day. Yet deep workers earn **17% more** on average and report lower stress and higher fulfillment. Deep work has a counterintuitive property: doing harder, deeper work actually feels *easier*—because it puts you in flow state instead of perpetual fragmentation.
+
+### How Ralph Loop Breaks the Trap
+
+The design philosophy is simple: **separate planning from execution. Let humans and AI each work at their own pace.**
+
+- AI gets stuck? It clears its own context and retries
+- Task fails multiple times? AI logs possible reasons and moves on, leaving notes for your review
+- AI doesn't stop to wait for you. You don't need to stop to wait for AI
+
+**What this means in practice:**
+
+During planning, you can think holistically about the entire project—steps, dependencies, alternative approaches. You can give each step multiple options for AI to try overnight. You won't be interrupted mid-thought by "AI is executing step 3, I need to wait for the result."
+
+And here's the crucial point: during the planning phase, you can absolutely keep talking to AI. Ask it to refine your task list, think through project structure, catch edge cases. This kind of dialogue is part of deep thinking, not an interruption to it.
+
+**Conversational planning ≠ supervisory execution.** The first helps you think. The second drains your cognition. Ralph Loop lets you keep the first and ditch the second.
+
+### Play to Your Strengths
+
+| Human Brains Excel At | AI Excels At |
+|-----------------------|--------------|
+| Deep thinking | Sustained execution |
+| Strategic planning | Tireless repetition |
+| Creative problem-solving | Mechanical task processing |
+
+Why force the human brain to do "supervise AI execution"—something it's terrible at? That's wasting your most precious cognitive resource.
+
+**Focus isn't a limitation. It's liberation.**
+
+### The Recommended Workflow
+
+1. **Morning**: 2–4 hours of focused task planning. Natural language. No execution. Talk to AI constantly—refining task lists, catching edge cases, mapping the project structure.
+2. **Before bed**: Start the loop with `./ralph_wiggum_loop.sh`
+3. **Next morning**: Review AI's logs and summary. Enter flow again—planning the next iteration.
+
+**Every additional day in traditional AI collaboration mode, you're potentially wasting:**
+- 20% of your cognitive capacity
+- 40% of your working hours
+- Countless opportunities for deep, fulfilling work
+
+Let cognitive science work for you, not against you.
+
+*Good night. Sleep well. Let the AI have the nightmares.*
+
+---
+
 ## Installation
 
 ### Option 1: Quick Install (Download Skill File)
