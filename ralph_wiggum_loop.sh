@@ -21,9 +21,9 @@ RETRY_DELAY=5  # Seconds to wait between retry attempts
 EXPONENTIAL_BACKOFF=false  # If true, use exponential backoff (5s, 10s, 15s, etc.)
 LOCK_FILE=""  # Will be set after TODO_FILE is determined
 
-# Health Check Configuration (Issue #22)
+# Health Check Configuration (Issue #22, updated by Issue #28)
 HEALTH_CHECK_INTERVAL=30  # Check log file activity every 30 seconds
-HEALTH_CHECK_INACTIVITY_TIMEOUT=300  # 5 minutes of inactivity before killing hung process
+HEALTH_CHECK_INACTIVITY_TIMEOUT=900  # 15 minutes of inactivity before killing hung process (Issue #28: increased from 5 min)
 HEALTH_CHECK_ENABLED=true  # Enable/disable health check monitoring
 
 # Colors for output
@@ -37,6 +37,8 @@ NC='\033[0m' # No Color
 MAX_ITERATIONS=999999  # Default to effectively unlimited
 TODO_FILE=""
 WORKING_DIR=""
+VALIDATE_ONLY=false  # Issue #30: Validation mode
+AUTO_FIX=false  # Issue #30: Auto-fix mode for validation
 
 # Usage function
 usage() {
@@ -59,8 +61,10 @@ usage() {
     echo "  --health-check-interval SECS"
     echo "                        Health check interval in seconds (default: 30)"
     echo "  --health-check-timeout SECS"
-    echo "                        Inactivity timeout before killing hung process (default: 300)"
+    echo "                        Inactivity timeout before killing hung process (default: 900)"
     echo "  --no-health-check     Disable health check monitoring"
+    echo "  --validate            Validate todolist.json and exit (Issue #30)"
+    echo "  --validate --fix      Validate and auto-fix issues where possible"
     echo "  --help, -h            Show this help message"
     echo ""
     echo "Examples:"
@@ -162,6 +166,14 @@ while [[ $# -gt 0 ]]; do
             HEALTH_CHECK_ENABLED=false
             shift
             ;;
+        --validate)
+            VALIDATE_ONLY=true
+            shift
+            ;;
+        --fix)
+            AUTO_FIX=true
+            shift
+            ;;
         --help|-h)
             usage
             ;;
@@ -257,6 +269,270 @@ fi
 if [ ! -f "$TODO_FILE" ]; then
     echo -e "${RED}Error: Todo list file not found at $TODO_FILE${NC}"
     exit 1
+fi
+
+# ============================================================================
+# Validation Mode Functions (Issue #30)
+# ============================================================================
+
+# Function to sync statistics (minimal version for validation mode)
+sync_statistics_for_validation() {
+    local tmp_file=$(mktemp)
+    if jq '
+        (.tasks | map(select(.status == "pending")) | length) as $pending |
+        (.tasks | map(select(.status == "in_progress")) | length) as $in_progress |
+        (.tasks | map(select(.status == "passed")) | length) as $passed |
+        (.tasks | map(select(.status == "failed")) | length) as $failed |
+        (.tasks | map(select(.status == "skipped")) | length) as $skipped |
+        (.tasks | length) as $total |
+        .statistics.total_tasks = $total |
+        .statistics.pending = $pending |
+        .statistics.in_progress = $in_progress |
+        .statistics.passed = $passed |
+        .statistics.failed = $failed |
+        .statistics.skipped = $skipped |
+        .metadata.last_updated = (now | strftime("%Y-%m-%d"))
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$TODO_FILE"
+        return 0
+    else
+        rm -f "$tmp_file"
+        return 1
+    fi
+}
+
+# Function to validate the todolist.json file
+# Returns 0 if valid, 1 if errors found
+validate_todolist() {
+    local todo_file="$1"
+    local auto_fix="${2:-false}"
+    local errors=0
+    local warnings=0
+    local fixable=0
+
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║             Todolist Validation (Issue #30)                    ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${BLUE}Validating: $todo_file${NC}"
+    echo ""
+
+    # Check 1: Statistics synchronization
+    echo -e "${YELLOW}[1/8] Checking statistics synchronization...${NC}"
+    local actual_pending=$(jq '[.tasks[] | select(.status == "pending")] | length' "$todo_file" 2>/dev/null)
+    local actual_in_progress=$(jq '[.tasks[] | select(.status == "in_progress")] | length' "$todo_file" 2>/dev/null)
+    local actual_passed=$(jq '[.tasks[] | select(.status == "passed")] | length' "$todo_file" 2>/dev/null)
+    local actual_failed=$(jq '[.tasks[] | select(.status == "failed")] | length' "$todo_file" 2>/dev/null)
+    local actual_skipped=$(jq '[.tasks[] | select(.status == "skipped")] | length' "$todo_file" 2>/dev/null)
+    local actual_total=$(jq '.tasks | length' "$todo_file" 2>/dev/null)
+
+    local reported_pending=$(jq '.statistics.pending // 0' "$todo_file" 2>/dev/null)
+    local reported_in_progress=$(jq '.statistics.in_progress // 0' "$todo_file" 2>/dev/null)
+    local reported_passed=$(jq '.statistics.passed // 0' "$todo_file" 2>/dev/null)
+    local reported_failed=$(jq '.statistics.failed // 0' "$todo_file" 2>/dev/null)
+    local reported_skipped=$(jq '.statistics.skipped // 0' "$todo_file" 2>/dev/null)
+    local reported_total=$(jq '.statistics.total_tasks // 0' "$todo_file" 2>/dev/null)
+
+    local stats_mismatch=false
+    if [ "$actual_pending" != "$reported_pending" ] || \
+       [ "$actual_in_progress" != "$reported_in_progress" ] || \
+       [ "$actual_passed" != "$reported_passed" ] || \
+       [ "$actual_failed" != "$reported_failed" ] || \
+       [ "$actual_skipped" != "$reported_skipped" ] || \
+       [ "$actual_total" != "$reported_total" ]; then
+        stats_mismatch=true
+        echo -e "${RED}  ✗ Statistics mismatch detected:${NC}"
+        echo "    Actual:   pending=$actual_pending, in_progress=$actual_in_progress, passed=$actual_passed, failed=$actual_failed, skipped=$actual_skipped, total=$actual_total"
+        echo "    Reported: pending=$reported_pending, in_progress=$reported_in_progress, passed=$reported_passed, failed=$reported_failed, skipped=$reported_skipped, total=$reported_total"
+        fixable=$((fixable + 1))
+        if [ "$auto_fix" = true ]; then
+            echo -e "${GREEN}  → Auto-fixing statistics...${NC}"
+            sync_statistics_for_validation
+            echo -e "${GREEN}  ✓ Statistics synchronized${NC}"
+        else
+            echo -e "${YELLOW}  → Run with --fix to auto-fix this issue${NC}"
+        fi
+    else
+        echo -e "${GREEN}  ✓ Statistics are synchronized${NC}"
+    fi
+
+    # Check 2: Dependency validation (all dependencies exist)
+    echo -e "${YELLOW}[2/8] Checking dependency validation...${NC}"
+    local missing_deps_output=$(jq -r '
+        [.tasks[].id] as $all_ids |
+        .tasks[] |
+        .id as $task_id |
+        (.dependencies // [])[] |
+        select(. as $dep | $all_ids | contains([$dep]) | not) |
+        "Task " + $task_id + " depends on non-existent task: " + .
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$missing_deps_output" ]; then
+        echo -e "${RED}  ✗ Missing dependencies found:${NC}"
+        echo "$missing_deps_output" | while read -r line; do
+            echo "    $line"
+            errors=$((errors + 1))
+        done
+    else
+        echo -e "${GREEN}  ✓ All dependencies exist${NC}"
+    fi
+
+    # Check 3: Circular dependency detection
+    echo -e "${YELLOW}[3/8] Checking for circular dependencies...${NC}"
+    local circular_deps=$(jq -r '
+        def find_cycle($visited; $path):
+            if . as $id | $visited | contains([$id]) then
+                $path + [$id]
+            else
+                . as $id |
+                (.tasks[] | select(.id == $id) | .dependencies[]?) as $dep |
+                if $dep then
+                    $dep | find_cycle($visited + [$id]; $path + [$id])
+                else
+                    null
+                end
+            end;
+        [.tasks[].id] as $all_ids |
+        [$all_ids[] | . as $start | $start | find_cycle([]; []) | select(. != null)] |
+        if length > 0 then .[0] | join(" -> ") else "" end
+    ' "$todo_file" 2>/dev/null || echo "")
+    if [ -n "$circular_deps" ] && [ "$circular_deps" != "" ]; then
+        echo -e "${RED}  ✗ Circular dependency detected: $circular_deps${NC}"
+        errors=$((errors + 1))
+    else
+        echo -e "${GREEN}  ✓ No circular dependencies found${NC}"
+    fi
+
+    # Check 4: Blocked task analysis
+    echo -e "${YELLOW}[4/8] Analyzing blocked tasks...${NC}"
+    local blocked_tasks=$(jq -r '
+        [.tasks[] | select(.status == "passed") | .id] as $passed |
+        [.tasks[] | select(.status == "failed") | .id] as $failed |
+        .tasks[] | select(
+            .status == "pending" and
+            (.dependencies | length > 0) and
+            (.dependencies | any(. as $dep | $failed | contains([$dep])))
+        ) | "\(.id): blocked by failed dependency"
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$blocked_tasks" ]; then
+        echo -e "${YELLOW}  ⚠ Blocked tasks (dependencies failed):${NC}"
+        echo "$blocked_tasks" | while read -r line; do
+            echo "    $line"
+        done
+        warnings=$((warnings + 1))
+    else
+        echo -e "${GREEN}  ✓ No tasks blocked by failed dependencies${NC}"
+    fi
+
+    # Check 5: Ready task count
+    echo -e "${YELLOW}[5/8] Counting ready tasks...${NC}"
+    local ready_count=$(jq -r '
+        [.tasks[] | select(.status == "passed") | .id] as $passed |
+        [.tasks[] | select(
+            .status == "pending" and
+            ((.dependencies | length == 0) or (.dependencies | all(. as $dep | $passed | contains([$dep]))))
+        )] | length
+    ' "$todo_file" 2>/dev/null)
+    echo -e "${GREEN}  ✓ Ready tasks (can run now): $ready_count${NC}"
+
+    # Check 6: Missing required fields
+    echo -e "${YELLOW}[6/8] Checking for missing required fields...${NC}"
+    local missing_fields_output=$(jq -r '
+        ["id", "name", "status", "priority", "dependencies", "failure_count"] as $required |
+        .tasks[] |
+        . as $task |
+        $required[] |
+        select($task | has(.) | not) |
+        "Task " + ($task.id // "UNKNOWN") + ": missing field \"" + . + "\""
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$missing_fields_output" ]; then
+        echo -e "${RED}  ✗ Missing required fields:${NC}"
+        echo "$missing_fields_output" | while read -r line; do
+            echo "    $line"
+            errors=$((errors + 1))
+        done
+    else
+        echo -e "${GREEN}  ✓ All tasks have required fields${NC}"
+    fi
+
+    # Check 7: Invalid status values
+    echo -e "${YELLOW}[7/8] Checking for invalid status values...${NC}"
+    local valid_statuses="pending in_progress passed failed skipped"
+    local invalid_statuses=$(jq -r '
+        .tasks[] | select(
+            .status as $s |
+            ["pending", "in_progress", "passed", "failed", "skipped"] | contains([$s]) | not
+        ) | "\(.id): invalid status \"\(.status)\""
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$invalid_statuses" ]; then
+        echo -e "${RED}  ✗ Invalid status values found:${NC}"
+        echo "$invalid_statuses" | while read -r line; do
+            echo "    $line"
+            errors=$((errors + 1))
+        done
+    else
+        echo -e "${GREEN}  ✓ All status values are valid${NC}"
+    fi
+
+    # Check 8: Priority conflicts (duplicate priorities within same category)
+    echo -e "${YELLOW}[8/8] Checking for priority conflicts...${NC}"
+    local priority_conflicts=$(jq -r '
+        [.tasks[] | select(.status == "pending")] |
+        group_by(.priority) |
+        map(select(length > 1)) |
+        map("Priority \(.[0].priority): " + ([.[] | .id] | join(", "))) |
+        .[]
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$priority_conflicts" ]; then
+        echo -e "${YELLOW}  ⚠ Multiple pending tasks share the same priority (not an error, but may affect ordering):${NC}"
+        echo "$priority_conflicts" | while read -r line; do
+            echo "    $line"
+        done
+        warnings=$((warnings + 1))
+    else
+        echo -e "${GREEN}  ✓ No priority conflicts found${NC}"
+    fi
+
+    # Summary
+    echo ""
+    echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}Validation Summary${NC}"
+    echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
+
+    if [ $errors -gt 0 ]; then
+        echo -e "${RED}  Errors: $errors (must be fixed before running)${NC}"
+    else
+        echo -e "${GREEN}  Errors: 0${NC}"
+    fi
+
+    if [ $warnings -gt 0 ]; then
+        echo -e "${YELLOW}  Warnings: $warnings (optional to fix)${NC}"
+    else
+        echo -e "${GREEN}  Warnings: 0${NC}"
+    fi
+
+    if [ $fixable -gt 0 ] && [ "$auto_fix" != true ]; then
+        echo -e "${YELLOW}  Fixable issues: $fixable (run with --fix to auto-fix)${NC}"
+    fi
+
+    echo ""
+
+    if [ $errors -gt 0 ]; then
+        echo -e "${RED}Validation FAILED. Please fix the errors above before running the loop.${NC}"
+        return 1
+    else
+        echo -e "${GREEN}Validation PASSED. Todolist is ready for execution.${NC}"
+        return 0
+    fi
+}
+
+# ============================================================================
+# Validation Mode (Issue #30)
+# ============================================================================
+
+# If --validate was passed, run validation and exit
+if [ "$VALIDATE_ONLY" = true ]; then
+    validate_todolist "$TODO_FILE" "$AUTO_FIX"
+    exit $?
 fi
 
 # ============================================================================
@@ -399,8 +675,17 @@ EOF
     fi
 }
 
-# Set up trap to clean up lock file on exit
-trap cleanup_lock_file EXIT INT TERM
+# Function to handle cleanup on exit
+cleanup_on_exit() {
+    # Sync statistics before exiting (Issue #27)
+    if [ -f "$TODO_FILE" ]; then
+        sync_statistics || true
+    fi
+    cleanup_lock_file
+}
+
+# Set up trap to clean up lock file and sync statistics on exit
+trap cleanup_on_exit EXIT INT TERM
 
 # Check for concurrent loop before proceeding
 check_concurrent_loop
@@ -521,6 +806,121 @@ increment_failure_count() {
         echo -e "${YELLOW}Warning: Failed to increment failure count (JSON operation failed)${NC}"
         rm -f "$tmp_file"
     fi
+}
+
+# ============================================================================
+# Statistics Synchronization (Issue #27)
+# ============================================================================
+
+# Function to synchronize statistics with actual task counts
+# This ensures the statistics field always reflects the true state of tasks
+sync_statistics() {
+    local tmp_file=$(mktemp)
+
+    if jq '
+        # Count actual task statuses
+        (.tasks | map(select(.status == "pending")) | length) as $pending |
+        (.tasks | map(select(.status == "in_progress")) | length) as $in_progress |
+        (.tasks | map(select(.status == "passed")) | length) as $passed |
+        (.tasks | map(select(.status == "failed")) | length) as $failed |
+        (.tasks | map(select(.status == "skipped")) | length) as $skipped |
+        (.tasks | length) as $total |
+
+        # Update statistics to match reality
+        .statistics.total_tasks = $total |
+        .statistics.pending = $pending |
+        .statistics.in_progress = $in_progress |
+        .statistics.passed = $passed |
+        .statistics.failed = $failed |
+        .statistics.skipped = $skipped |
+        .metadata.last_updated = (now | strftime("%Y-%m-%d"))
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        # Verify the sync was successful by comparing counts
+        local old_passed=$(jq -r '.statistics.passed // 0' "$TODO_FILE" 2>/dev/null)
+        local new_passed=$(jq -r '.statistics.passed // 0' "$tmp_file" 2>/dev/null)
+        local old_failed=$(jq -r '.statistics.failed // 0' "$TODO_FILE" 2>/dev/null)
+        local new_failed=$(jq -r '.statistics.failed // 0' "$tmp_file" 2>/dev/null)
+
+        mv "$tmp_file" "$TODO_FILE"
+
+        # Log if there was a discrepancy that was corrected
+        if [ "$old_passed" != "$new_passed" ] || [ "$old_failed" != "$new_failed" ]; then
+            echo -e "${YELLOW}[Issue #27] Statistics synchronized: passed ${old_passed}→${new_passed}, failed ${old_failed}→${new_failed}${NC}"
+        fi
+        return 0
+    else
+        echo -e "${YELLOW}Warning: Failed to sync statistics (JSON operation failed)${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+}
+
+# ============================================================================
+# Per-Task Timeout Configuration (Issue #29)
+# ============================================================================
+
+# Function to get timeout for a specific task
+# Resolution order: task.timeout -> metadata.category_timeouts[category] -> script default
+get_task_timeout() {
+    local task_id="$1"
+    local task_json=$(get_task_details "$task_id")
+
+    # 1. Check for task-level timeout
+    local task_timeout=$(echo "$task_json" | jq -r '.timeout // empty' 2>/dev/null)
+    if [ -n "$task_timeout" ] && [ "$task_timeout" != "null" ]; then
+        echo "$task_timeout"
+        return 0
+    fi
+
+    # 2. Check for category-level timeout in metadata
+    local category=$(echo "$task_json" | jq -r '.category // "default"' 2>/dev/null)
+    local category_timeout=$(jq -r --arg cat "$category" '.metadata.category_timeouts[$cat] // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$category_timeout" ] && [ "$category_timeout" != "null" ]; then
+        echo "$category_timeout"
+        return 0
+    fi
+
+    # 3. Check for default timeout in metadata
+    local metadata_timeout=$(jq -r '.metadata.default_timeout // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$metadata_timeout" ] && [ "$metadata_timeout" != "null" ]; then
+        echo "$metadata_timeout"
+        return 0
+    fi
+
+    # 4. Fall back to script default
+    echo "$TIMEOUT_SECONDS"
+}
+
+# Function to get health check timeout for a specific task
+# Resolution order: task.health_check_timeout -> metadata.category_health_check_timeouts[category] -> script default
+get_task_health_check_timeout() {
+    local task_id="$1"
+    local task_json=$(get_task_details "$task_id")
+
+    # 1. Check for task-level health_check_timeout
+    local task_hc_timeout=$(echo "$task_json" | jq -r '.health_check_timeout // empty' 2>/dev/null)
+    if [ -n "$task_hc_timeout" ] && [ "$task_hc_timeout" != "null" ]; then
+        echo "$task_hc_timeout"
+        return 0
+    fi
+
+    # 2. Check for category-level health check timeout in metadata
+    local category=$(echo "$task_json" | jq -r '.category // "default"' 2>/dev/null)
+    local category_hc_timeout=$(jq -r --arg cat "$category" '.metadata.category_health_check_timeouts[$cat] // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$category_hc_timeout" ] && [ "$category_hc_timeout" != "null" ]; then
+        echo "$category_hc_timeout"
+        return 0
+    fi
+
+    # 3. Check for default health check timeout in metadata
+    local metadata_hc_timeout=$(jq -r '.metadata.default_health_check_timeout // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$metadata_hc_timeout" ] && [ "$metadata_hc_timeout" != "null" ]; then
+        echo "$metadata_hc_timeout"
+        return 0
+    fi
+
+    # 4. Fall back to script default
+    echo "$HEALTH_CHECK_INACTIVITY_TIMEOUT"
 }
 
 # ============================================================================
@@ -943,7 +1343,8 @@ start_health_check_monitor() {
     local log_file="$1"
     local claude_pid="$2"
     local check_interval="${HEALTH_CHECK_INTERVAL:-30}"
-    local inactivity_timeout="${HEALTH_CHECK_INACTIVITY_TIMEOUT:-300}"
+    # Issue #29: Support per-task health check timeout via override variable
+    local inactivity_timeout="${HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE:-${HEALTH_CHECK_INACTIVITY_TIMEOUT:-900}}"
 
     if [ "$HEALTH_CHECK_ENABLED" != true ]; then
         return 0
@@ -1128,6 +1529,8 @@ run_claude_with_timeout() {
     local prompt_file="$1"
     local task_id="$2"
     local attempt_num="${3:-1}"
+    local task_timeout="${4:-$TIMEOUT_SECONDS}"  # Issue #29: Per-task timeout
+    local task_hc_timeout="${5:-$HEALTH_CHECK_INACTIVITY_TIMEOUT}"  # Issue #29: Per-task health check timeout
 
     # Generate log file path with timestamp and attempt number
     local timestamp=$(date '+%Y%m%d_%H%M%S')
@@ -1138,8 +1541,9 @@ run_claude_with_timeout() {
 
     echo -e "${BLUE}Running Claude CLI...${NC}"
     echo -e "${BLUE}Log file: $log_file${NC}"
+    echo -e "${BLUE}Timeout: $((task_timeout / 60))m ${task_timeout}s${NC}"
     if [ "$HEALTH_CHECK_ENABLED" = true ]; then
-        echo -e "${BLUE}Health check: enabled (interval: ${HEALTH_CHECK_INTERVAL}s, inactivity timeout: ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s)${NC}"
+        echo -e "${BLUE}Health check: enabled (interval: ${HEALTH_CHECK_INTERVAL}s, inactivity timeout: ${task_hc_timeout}s)${NC}"
     fi
     echo -e "${BLUE}────────────────────────────────────────────────────────────────${NC}"
 
@@ -1151,8 +1555,8 @@ Ralph Wiggum Loop - Claude Execution Log
 Task ID: $task_id
 Attempt: $attempt_num
 Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
-Timeout: ${TIMEOUT_SECONDS}s
-Health Check: $([ "$HEALTH_CHECK_ENABLED" = true ] && echo "enabled (${HEALTH_CHECK_INTERVAL}s interval, ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s inactivity timeout)" || echo "disabled")
+Timeout: ${task_timeout}s (Issue #29: per-task configuration)
+Health Check: $([ "$HEALTH_CHECK_ENABLED" = true ] && echo "enabled (${HEALTH_CHECK_INTERVAL}s interval, ${task_hc_timeout}s inactivity timeout)" || echo "disabled")
 Working Directory: $WORKING_DIR
 ================================================================================
 
@@ -1177,15 +1581,16 @@ EOF
         # Use timeout command with tee to capture output while displaying
         # For health check with timeout command, we need to run in background to get PID
         if [ "$HEALTH_CHECK_ENABLED" = true ]; then
-            # Run with health check monitoring
+            # Run with health check monitoring (Issue #29: using per-task timeouts)
             if command -v stdbuf &> /dev/null; then
-                stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+                stdbuf -oL -eL $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
             else
-                $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+                $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
             fi
             local claude_pid=$!
 
-            # Start health check monitor
+            # Start health check monitor with per-task timeout (Issue #29)
+            HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE="$task_hc_timeout"
             start_health_check_monitor "$log_file" "$claude_pid"
 
             # Wait for completion
@@ -1193,6 +1598,7 @@ EOF
 
             # Stop health check monitor
             stop_health_check_monitor "$log_file"
+            unset HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE
 
             # Check if killed by health check
             if was_killed_by_health_check "$log_file"; then
@@ -1200,28 +1606,29 @@ EOF
                 exit_code=125  # Custom exit code for health check termination
             fi
         else
-            # Run without health check (original behavior)
+            # Run without health check (original behavior, Issue #29: using per-task timeout)
             if command -v stdbuf &> /dev/null; then
-                stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+                stdbuf -oL -eL $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
             else
-                $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+                $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
             fi
         fi
     else
-        # Fallback: use background process with manual timeout
+        # Fallback: use background process with manual timeout (Issue #29: using per-task timeouts)
         # Use log file directly instead of /tmp
         claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
         local claude_pid=$!
 
-        # Start health check monitor
+        # Start health check monitor with per-task timeout (Issue #29)
+        HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE="$task_hc_timeout"
         start_health_check_monitor "$log_file" "$claude_pid"
 
         local elapsed=0
         while kill -0 $claude_pid 2>/dev/null; do
             sleep 5
             elapsed=$((elapsed + 5))
-            if [ $elapsed -ge $TIMEOUT_SECONDS ]; then
-                echo -e "${YELLOW}Timeout reached. Terminating Claude...${NC}"
+            if [ $elapsed -ge $task_timeout ]; then
+                echo -e "${YELLOW}Timeout reached (${task_timeout}s). Terminating Claude...${NC}"
                 kill -TERM $claude_pid 2>/dev/null || true
                 sleep 2
                 kill -KILL $claude_pid 2>/dev/null || true
@@ -1243,6 +1650,7 @@ EOF
 
         # Stop health check monitor
         stop_health_check_monitor "$log_file"
+        unset HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE
     fi
 
     # Post-execution checks (Issue #22)
@@ -1440,6 +1848,12 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo -e "${BLUE}Created prompt file: $prompt_file${NC}"
     echo ""
 
+    # Get per-task timeouts (Issue #29)
+    task_timeout=$(get_task_timeout "$task_id")
+    task_hc_timeout=$(get_task_health_check_timeout "$task_id")
+    echo -e "${BLUE}Task timeout: $((task_timeout / 60))m (${task_timeout}s), Health check timeout: ${task_hc_timeout}s${NC}"
+    echo ""
+
     # Run Claude with retry logic
     start_time=$(date +%s)
     attempt=1
@@ -1461,7 +1875,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
 
         echo -e "${BLUE}Attempt $attempt of $MAX_RETRIES${NC}"
 
-        if run_claude_with_timeout "$prompt_file" "$task_id" "$attempt"; then
+        if run_claude_with_timeout "$prompt_file" "$task_id" "$attempt" "$task_timeout" "$task_hc_timeout"; then
             echo -e "${GREEN}Claude completed successfully on attempt $attempt.${NC}"
             task_succeeded=true
             break
@@ -1589,6 +2003,9 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo ""
     echo -e "${BLUE}Iteration $iteration completed in $((duration / 60))m $((duration % 60))s${NC}"
     echo ""
+
+    # Sync statistics at end of each iteration (Issue #27)
+    sync_statistics || true
 
     # Show current statistics
     stats=$(jq '.statistics' "$TODO_FILE" 2>/dev/null || echo '{}')
