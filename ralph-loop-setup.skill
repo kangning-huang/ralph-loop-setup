@@ -247,8 +247,27 @@ run_claude() {
     local log_file="$LOG_DIR/iteration_${iteration}_$(date '+%Y%m%d_%H%M%S').log"
 
     pushd "$WORKING_DIR" > /dev/null
-    timeout $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 | tee "$log_file"
-    local exit_code=${PIPESTATUS[0]}
+
+    # Run Claude in background with manual timeout (native - works on macOS and Linux)
+    claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 | tee "$log_file" &
+    local claude_pid=$!
+    local exit_code=0
+    local elapsed=0
+
+    while kill -0 $claude_pid 2>/dev/null; do
+        sleep 5
+        elapsed=$((elapsed + 5))
+        if [[ $elapsed -ge $TIMEOUT_SECONDS ]]; then
+            echo -e "${YELLOW}Timeout reached (${TIMEOUT_SECONDS}s). Terminating...${NC}"
+            kill -TERM $claude_pid 2>/dev/null || true
+            sleep 2
+            kill -KILL $claude_pid 2>/dev/null || true
+            exit_code=124
+            break
+        fi
+    done
+
+    [[ $exit_code -eq 0 ]] && wait $claude_pid || exit_code=$?
     popd > /dev/null
     return $exit_code
 }
