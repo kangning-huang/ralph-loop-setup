@@ -7,7 +7,10 @@
 # Each iteration works on ONE task, updates progress, and commits changes.
 # Works with any project - reads project info from the todo list metadata.
 
-set -e
+# Issue #25: Removed `set -e` to prevent premature exit after task completion.
+# Keep `set -u` for undefined variable protection, but allow commands to fail
+# without terminating the entire script. Error handling is done explicitly.
+set -u
 
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -315,18 +318,18 @@ check_concurrent_loop() {
 
 # Function to detect stuck tasks (tasks with in_progress status)
 detect_stuck_tasks() {
-    jq -r '[.tasks[] | select(.status == "in_progress")] | length' "$TODO_FILE"
+    jq -r '[.tasks[] | select(.status == "in_progress")] | length' "$TODO_FILE" 2>/dev/null || echo "0"
 }
 
 # Function to get stuck task IDs and names
 get_stuck_tasks_info() {
-    jq -r '.tasks[] | select(.status == "in_progress") | "\(.id): \(.name)"' "$TODO_FILE"
+    jq -r '.tasks[] | select(.status == "in_progress") | "\(.id): \(.name)"' "$TODO_FILE" 2>/dev/null || true
 }
 
 # Function to reset stuck tasks to pending
 reset_stuck_tasks() {
     local tmp_file=$(mktemp)
-    jq '
+    if jq '
         .tasks = [.tasks[] |
             if .status == "in_progress" then
                 .status = "pending" |
@@ -340,7 +343,12 @@ reset_stuck_tasks() {
         .statistics.failed = ([.tasks[] | select(.status == "failed")] | length) |
         .statistics.skipped = ([.tasks[] | select(.status == "skipped")] | length) |
         .metadata.last_updated = (now | strftime("%Y-%m-%d"))
-    ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$TODO_FILE"
+    else
+        echo -e "${YELLOW}Warning: Failed to reset stuck tasks (JSON operation failed)${NC}"
+        rm -f "$tmp_file"
+    fi
 }
 
 # Function to check for and handle stuck tasks
@@ -447,7 +455,7 @@ get_next_task() {
 
         # Return empty string if no task found
         if . == null then "" else .id end
-    ' "$TODO_FILE"
+    ' "$TODO_FILE" 2>/dev/null || echo ""
 }
 
 # Function to check if all remaining tasks have failed too many times
@@ -457,7 +465,7 @@ all_tasks_exhausted() {
             .status == "pending" and
             .failure_count < $max_failures
         )] | length
-    ' "$TODO_FILE")
+    ' "$TODO_FILE" 2>/dev/null || echo "0")
 
     [ "$remaining" -eq 0 ]
 }
@@ -465,7 +473,7 @@ all_tasks_exhausted() {
 # Function to get task details
 get_task_details() {
     local task_id="$1"
-    jq -r --arg id "$task_id" '.tasks[] | select(.id == $id)' "$TODO_FILE"
+    jq -r --arg id "$task_id" '.tasks[] | select(.id == $id)' "$TODO_FILE" 2>/dev/null || echo "{}"
 }
 
 # Function to update task status in todo list
@@ -475,7 +483,7 @@ update_task_status() {
     local notes="$3"
 
     local tmp_file=$(mktemp)
-    jq --arg id "$task_id" --arg status "$new_status" --arg notes "$notes" '
+    if jq --arg id "$task_id" --arg status "$new_status" --arg notes "$notes" '
         .tasks = [.tasks[] |
             if .id == $id then
                 .status = $status |
@@ -488,7 +496,12 @@ update_task_status() {
         .statistics.failed = ([.tasks[] | select(.status == "failed")] | length) |
         .statistics.skipped = ([.tasks[] | select(.status == "skipped")] | length) |
         .metadata.last_updated = (now | strftime("%Y-%m-%d"))
-    ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$TODO_FILE"
+    else
+        echo -e "${YELLOW}Warning: Failed to update task status (JSON operation failed)${NC}"
+        rm -f "$tmp_file"
+    fi
 }
 
 # Function to increment failure count
@@ -496,13 +509,18 @@ increment_failure_count() {
     local task_id="$1"
 
     local tmp_file=$(mktemp)
-    jq --arg id "$task_id" '
+    if jq --arg id "$task_id" '
         .tasks = [.tasks[] |
             if .id == $id then
                 .failure_count = (.failure_count + 1)
             else . end
         ]
-    ' "$TODO_FILE" > "$tmp_file" && mv "$tmp_file" "$TODO_FILE"
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$TODO_FILE"
+    else
+        echo -e "${YELLOW}Warning: Failed to increment failure count (JSON operation failed)${NC}"
+        rm -f "$tmp_file"
+    fi
 }
 
 # ============================================================================
@@ -680,7 +698,7 @@ check_task_artifacts() {
 
     # Check 3: Todo list status was updated to passed (weight: 5 - definitive)
     max_score=$((max_score + 5))
-    local current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+    local current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
     if [ "$current_status" = "passed" ]; then
         artifact_score=$((artifact_score + 5))
         echo -e "${GREEN}    ✓ Task status was updated to 'passed'${NC}"
@@ -776,9 +794,9 @@ create_claude_prompt() {
     local failure_count=$(echo "$task_json" | jq -r '.failure_count')
 
     # Get build/test commands from todo list metadata (optional)
-    local build_command=$(jq -r '.metadata.build_command // ""' "$TODO_FILE")
-    local test_command=$(jq -r '.metadata.test_command // ""' "$TODO_FILE")
-    local extra_instructions=$(jq -r '.metadata.extra_instructions // ""' "$TODO_FILE")
+    local build_command=$(jq -r '.metadata.build_command // ""' "$TODO_FILE" 2>/dev/null || echo "")
+    local test_command=$(jq -r '.metadata.test_command // ""' "$TODO_FILE" 2>/dev/null || echo "")
+    local extra_instructions=$(jq -r '.metadata.extra_instructions // ""' "$TODO_FILE" 2>/dev/null || echo "")
 
     # Get previous lessons from progress.txt for this task
     # Uses awk to find the most recent entry for this task and extract its lessons
@@ -996,9 +1014,9 @@ start_health_check_monitor() {
 
 # Function to stop health check monitor
 stop_health_check_monitor() {
-    local log_file="$1"
+    local log_file="${1:-}"
 
-    if [ -n "$HEALTH_CHECK_PID" ]; then
+    if [ -n "${HEALTH_CHECK_PID:-}" ]; then
         kill "$HEALTH_CHECK_PID" 2>/dev/null || true
         wait "$HEALTH_CHECK_PID" 2>/dev/null || true
         HEALTH_CHECK_PID=""
@@ -1006,7 +1024,7 @@ stop_health_check_monitor() {
 
     # Clean up status file
     if [ -n "$log_file" ]; then
-        rm -f "${log_file}.health_status"
+        rm -f "${log_file}.health_status" 2>/dev/null || true
     fi
 }
 
@@ -1153,7 +1171,7 @@ EOF
     local api_error=""
 
     # Change to working directory for Claude execution
-    pushd "$WORKING_DIR" > /dev/null
+    pushd "$WORKING_DIR" > /dev/null 2>&1 || true
 
     if [ -n "$timeout_cmd" ]; then
         # Use timeout command with tee to capture output while displaying
@@ -1284,7 +1302,7 @@ EOF
     echo -e "${BLUE}Log saved to: $log_file${NC}"
 
     # Return to original directory
-    popd > /dev/null
+    popd > /dev/null 2>&1 || true
 
     return $exit_code
 }
@@ -1497,7 +1515,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                     # Other exit codes - existing logic
                     echo -e "${RED}Claude exited with code $last_exit_code on attempt $attempt${NC}"
                     # Check if Claude updated the status to passed
-                    current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+                    current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
                     if [ "$current_status" = "passed" ]; then
                         echo -e "${GREEN}Task was marked as passed despite exit code.${NC}"
                         task_succeeded=true
@@ -1534,7 +1552,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     # Handle final failure after all retries exhausted
     # Skip if already handled by timeout (124), hung (125), empty log (126), or API error (127)
     if [ "$task_succeeded" = false ] && [ $last_exit_code -ne 124 ] && [ $last_exit_code -ne 125 ] && [ $last_exit_code -ne 126 ] && [ $last_exit_code -ne 127 ]; then
-        current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+        current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
         if [ "$current_status" = "in_progress" ]; then
             # Final artifact validation check before marking as failed (Issue #18)
             echo -e "${BLUE}Final artifact validation before marking task as failed...${NC}"
@@ -1573,9 +1591,9 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo ""
 
     # Show current statistics
-    stats=$(jq '.statistics' "$TODO_FILE")
+    stats=$(jq '.statistics' "$TODO_FILE" 2>/dev/null || echo '{}')
     echo -e "${YELLOW}Current Statistics:${NC}"
-    echo "$stats" | jq -r '"  Pending: \(.pending) | Passed: \(.passed) | Failed: \(.failed)"'
+    echo "$stats" | jq -r '"  Pending: \(.pending // 0) | Passed: \(.passed // 0) | Failed: \(.failed // 0)"' 2>/dev/null || echo "  (Statistics unavailable)"
     echo ""
 
     # Small delay between iterations
@@ -1590,7 +1608,7 @@ echo ""
 
 # Final statistics
 echo -e "${GREEN}Final Statistics:${NC}"
-jq '.statistics' "$TODO_FILE"
+jq '.statistics' "$TODO_FILE" 2>/dev/null || echo "  (Statistics unavailable)"
 
 echo ""
 echo -e "${YELLOW}Check progress.txt for detailed implementation log.${NC}"
