@@ -1,11 +1,13 @@
 ---
 name: ralph-loop-setup
-description: Set up automated task implementation system with Ralph Wiggum Loop. Creates todolist.json, progress.txt, and ralph_wiggum_loop.sh for autonomous task-based development.
+description: Set up automated task implementation system with Ralph Wiggum Loop. Creates todolist.json, progress.txt, and ralph_wiggum_loop.sh for autonomous AI-driven task-based development.
 ---
 
 # Ralph Loop Setup Skill
 
-You are helping the user set up the Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to work through a project todo list.
+You are helping the user set up the Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to intelligently work through a project todo list.
+
+**Key Feature**: Rather than strictly following priority order, Claude analyzes the full todo list and uses AI judgment to select the most impactful task based on strategic value, dependencies, likelihood of success, and logical ordering.
 
 ## What You Will Create
 
@@ -58,8 +60,12 @@ Write the following script:
 
 ```bash
 #!/bin/bash
-# Ralph Wiggum Loop - Automated Task Implementation
+# Ralph Wiggum Loop - Automated Task Implementation with AI-Driven Selection
 # "I'm helping!" - Ralph Wiggum
+#
+# Claude INTELLIGENTLY SELECTS the best task to work on, rather than
+# strictly following priority order. This leverages AI judgment for
+# better prioritization based on strategic value, dependencies, and context.
 
 set -u
 
@@ -112,9 +118,11 @@ LOG_DIR="$(dirname "$TODO_FILE")/logs"
 mkdir -p "$LOG_DIR"
 
 PROJECT_NAME=$(jq -r '.metadata.project // "Project"' "$TODO_FILE" 2>/dev/null || echo "Project")
+PROJECT_DESC=$(jq -r '.metadata.description // ""' "$TODO_FILE" 2>/dev/null || echo "")
 
 echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
 echo -e "${BLUE}║           Ralph Wiggum Loop - \"I'm helping!\"                   ║${NC}"
+echo -e "${BLUE}║              (AI-Driven Smart Task Selection)                  ║${NC}"
 echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
 echo ""
 echo -e "${GREEN}Project: ${PROJECT_NAME}${NC}"
@@ -132,18 +140,23 @@ command -v jq &>/dev/null || { echo -e "${RED}Error: jq not found${NC}"; exit 1;
 ================================================================================
 EOF
 
-get_next_task() {
-    jq -r --argjson max_failures "$MAX_FAILURES" '
+# Check if there are any eligible tasks
+has_eligible_tasks() {
+    local count=$(jq -r --argjson max_failures "$MAX_FAILURES" '
         [.tasks[] | select(.status == "passed") | .id] as $passed |
         [.tasks[] | select(
             .status == "pending" and
             .failure_count < $max_failures and
             ((.dependencies | length == 0) or (.dependencies | all(. as $dep | $passed | contains([$dep]))))
-        )] | sort_by(.priority) | first | if . == null then "" else .id end
-    ' "$TODO_FILE" 2>/dev/null || echo ""
+        )] | length
+    ' "$TODO_FILE" 2>/dev/null || echo "0")
+    [ "$count" -gt 0 ]
 }
 
-get_task_details() { jq -r --arg id "$1" '.tasks[] | select(.id == $id)' "$TODO_FILE" 2>/dev/null; }
+# Get the task ID that Claude selected (by checking which task is in_progress)
+get_selected_task_id() {
+    jq -r '.tasks[] | select(.status == "in_progress") | .id' "$TODO_FILE" 2>/dev/null | head -1
+}
 
 update_task_status() {
     local tmp=$(mktemp)
@@ -160,55 +173,78 @@ increment_failure() {
     jq --arg id "$1" '.tasks = [.tasks[] | if .id == $id then .failure_count = (.failure_count + 1) else . end]' "$TODO_FILE" > "$tmp" && mv "$tmp" "$TODO_FILE"
 }
 
+# Create prompt with full todo list - Claude selects the task
 create_prompt() {
-    local task_id="$1"
-    local task=$(get_task_details "$task_id")
-    local name=$(echo "$task" | jq -r '.name')
-    local desc=$(echo "$task" | jq -r '.description')
-    local criteria=$(echo "$task" | jq -r '.acceptance_criteria | join("\n  - ")')
-    local files=$(echo "$task" | jq -r '.files_likely_affected | join(", ")')
+    local todo_content=$(cat "$TODO_FILE")
+    local recent_progress=""
+    [[ -f "$PROGRESS_FILE" ]] && recent_progress=$(tail -50 "$PROGRESS_FILE")
     local build_cmd=$(jq -r '.metadata.build_command // ""' "$TODO_FILE")
     local test_cmd=$(jq -r '.metadata.test_command // ""' "$TODO_FILE")
 
     cat > "$PROMPT_FILE" << EOF
-# Task Implementation
+# Smart Task Selection & Implementation
 
-**IMPORTANT: Complete this task fully and exit. Do not ask follow-up questions.**
+**IMPORTANT: This is automated. Select ONE task, implement it fully, and exit. No follow-up questions.**
 
-## Task: $name
-- **ID**: $task_id
-- **Description**: $desc
+You are an AI coding agent for ${PROJECT_NAME}.
+${PROJECT_DESC:+**Description**: $PROJECT_DESC}
 
-### Acceptance Criteria
-  - $criteria
+## YOUR MISSION
 
-### Files Likely Affected
-$files
+1. **INTELLIGENTLY SELECT** the best task from the todo list below
+2. **IMPLEMENT** that single task completely
+
+### Task Selection Guidelines
+
+Select **EXACTLY ONE** task. Use AI judgment to consider:
+- **Strategic Impact**: Which task unblocks the most others?
+- **Dependencies**: Which completion enables many downstream tasks?
+- **Failure History**: Tasks with fewer failures may succeed easier
+- **Complexity**: Which task fits your current context best?
+- **Risk**: Avoid tasks likely to fail (vague requirements, external dependencies)
+
+**Eligibility**: Task must be "pending", failure_count < $MAX_FAILURES, all dependencies "passed"
+
+## THE TODO LIST
+
+\`\`\`json
+$todo_content
+\`\`\`
+
+## RECENT PROGRESS
+
+\`\`\`
+$recent_progress
+\`\`\`
 
 ## Instructions
-1. Read relevant files first
-2. Implement the task
-${build_cmd:+3. Verify build: \`$build_cmd\`}
-${test_cmd:+4. Run tests: \`$test_cmd\`}
+
+1. **Announce your selection** - State which task ID and WHY (1-2 sentences)
+2. Read relevant files first
+3. Implement the task
+${build_cmd:+4. Verify build: \`$build_cmd\`}
+${test_cmd:+5. Run tests: \`$test_cmd\`}
 
 ## After Implementation
 
-Update $TODO_FILE:
+Update $TODO_FILE (replace TASK_ID with your selected task):
 \`\`\`bash
-jq '.tasks = [.tasks[] | if .id == "$task_id" then .status = "passed" else . end]' "$TODO_FILE" > tmp.json && mv tmp.json "$TODO_FILE"
+jq '.tasks = [.tasks[] | if .id == "TASK_ID" then .status = "passed" else . end]' "$TODO_FILE" > tmp.json && mv tmp.json "$TODO_FILE"
 \`\`\`
 
-Append to $PROGRESS_FILE with timestamp, task ID, status, and summary.
+Append to $PROGRESS_FILE: timestamp, task ID, WHY you selected it, status, summary.
 
-If successful, commit: \`git commit -m "feat($task_id): $name"\`
+If successful, commit: \`git commit -m "feat(TASK_ID): Task name"\`
+
+**START NOW**: Analyze the todo list, select the best task, and implement it.
 EOF
     echo "$PROMPT_FILE"
 }
 
 run_claude() {
     local prompt_file="$1"
-    local task_id="$2"
-    local log_file="$LOG_DIR/${task_id}_$(date '+%Y%m%d_%H%M%S').log"
+    local iteration="$2"
+    local log_file="$LOG_DIR/iteration_${iteration}_$(date '+%Y%m%d_%H%M%S').log"
 
     pushd "$WORKING_DIR" > /dev/null
     timeout $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print "$(cat "$prompt_file")" 2>&1 | tee "$log_file"
@@ -217,30 +253,30 @@ run_claude() {
     return $exit_code
 }
 
-echo -e "${GREEN}Starting loop...${NC}"
+echo -e "${GREEN}Starting loop (AI-Driven Task Selection)...${NC}"
 iteration=0
 
 while [[ $iteration -lt $MAX_ITERATIONS ]]; do
     ((iteration++))
     echo -e "${BLUE}═══ Iteration $iteration ═══${NC}"
 
-    task_id=$(get_next_task)
-    [[ -z "$task_id" ]] && { echo -e "${YELLOW}No eligible tasks.${NC}"; break; }
+    has_eligible_tasks || { echo -e "${YELLOW}No eligible tasks.${NC}"; break; }
 
-    task_name=$(get_task_details "$task_id" | jq -r '.name')
-    echo -e "${GREEN}Task: $task_id - $task_name${NC}"
+    echo -e "${BLUE}Claude will intelligently select the best task...${NC}"
+    prompt_file=$(create_prompt)
 
-    update_task_status "$task_id" "in_progress" ""
-    prompt_file=$(create_prompt "$task_id")
-
-    if run_claude "$prompt_file" "$task_id"; then
-        echo -e "${GREEN}Task completed.${NC}"
+    if run_claude "$prompt_file" "$iteration"; then
+        task_id=$(get_selected_task_id)
+        [[ -n "$task_id" ]] && echo -e "${GREEN}Claude selected and completed: $task_id${NC}"
     else
         exit_code=$?
-        current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
-        if [[ "$current_status" != "passed" ]]; then
-            update_task_status "$task_id" "pending" "Failed with exit code $exit_code"
-            increment_failure "$task_id"
+        task_id=$(get_selected_task_id)
+        if [[ -n "$task_id" ]]; then
+            current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE")
+            if [[ "$current_status" != "passed" ]]; then
+                update_task_status "$task_id" "pending" "Failed with exit code $exit_code"
+                increment_failure "$task_id"
+            fi
         fi
     fi
 
@@ -313,9 +349,14 @@ Setup Complete!
 Created:
 1. todolist.json - X tasks
 2. progress.txt - Progress log
-3. ralph_wiggum_loop.sh - Automation script
+3. ralph_wiggum_loop.sh - Automation script with AI-driven task selection
 
 To run: ./ralph_wiggum_loop.sh
+
+How it works:
+- Claude analyzes the full todo list each iteration
+- AI intelligently selects the best task (not just by priority number)
+- Considers: strategic impact, dependencies, failure history, complexity
 
 Options:
   -m N    Max iterations
