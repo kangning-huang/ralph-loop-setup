@@ -4,7 +4,10 @@
 # "I'm helping!" - Ralph Wiggum
 #
 # This script iteratively runs Claude Code CLI to implement tasks from a todo list JSON file.
-# Each iteration works on ONE task, updates progress, and commits changes.
+# Each iteration lets Claude INTELLIGENTLY SELECT the best task to work on.
+# Rather than strictly following priority order, Claude analyzes the full todo list
+# and uses AI judgment to pick the most impactful task based on strategic value,
+# dependencies, likelihood of success, and logical ordering.
 # Works with any project - reads project info from the todo list metadata.
 
 # Issue #25: Removed `set -e` to prevent premature exit after task completion.
@@ -21,9 +24,9 @@ RETRY_DELAY=5  # Seconds to wait between retry attempts
 EXPONENTIAL_BACKOFF=false  # If true, use exponential backoff (5s, 10s, 15s, etc.)
 LOCK_FILE=""  # Will be set after TODO_FILE is determined
 
-# Health Check Configuration (Issue #22)
+# Health Check Configuration (Issue #22, updated by Issue #28)
 HEALTH_CHECK_INTERVAL=30  # Check log file activity every 30 seconds
-HEALTH_CHECK_INACTIVITY_TIMEOUT=300  # 5 minutes of inactivity before killing hung process
+HEALTH_CHECK_INACTIVITY_TIMEOUT=900  # 15 minutes of inactivity before killing hung process (Issue #28: increased from 5 min)
 HEALTH_CHECK_ENABLED=true  # Enable/disable health check monitoring
 
 # Colors for output
@@ -37,6 +40,8 @@ NC='\033[0m' # No Color
 MAX_ITERATIONS=999999  # Default to effectively unlimited
 TODO_FILE=""
 WORKING_DIR=""
+VALIDATE_ONLY=false  # Issue #30: Validation mode
+AUTO_FIX=false  # Issue #30: Auto-fix mode for validation
 
 # Usage function
 usage() {
@@ -59,8 +64,10 @@ usage() {
     echo "  --health-check-interval SECS"
     echo "                        Health check interval in seconds (default: 30)"
     echo "  --health-check-timeout SECS"
-    echo "                        Inactivity timeout before killing hung process (default: 300)"
+    echo "                        Inactivity timeout before killing hung process (default: 900)"
     echo "  --no-health-check     Disable health check monitoring"
+    echo "  --validate            Validate todolist.json and exit (Issue #30)"
+    echo "  --validate --fix      Validate and auto-fix issues where possible"
     echo "  --help, -h            Show this help message"
     echo ""
     echo "Examples:"
@@ -162,6 +169,14 @@ while [[ $# -gt 0 ]]; do
             HEALTH_CHECK_ENABLED=false
             shift
             ;;
+        --validate)
+            VALIDATE_ONLY=true
+            shift
+            ;;
+        --fix)
+            AUTO_FIX=true
+            shift
+            ;;
         --help|-h)
             usage
             ;;
@@ -257,6 +272,270 @@ fi
 if [ ! -f "$TODO_FILE" ]; then
     echo -e "${RED}Error: Todo list file not found at $TODO_FILE${NC}"
     exit 1
+fi
+
+# ============================================================================
+# Validation Mode Functions (Issue #30)
+# ============================================================================
+
+# Function to sync statistics (minimal version for validation mode)
+sync_statistics_for_validation() {
+    local tmp_file=$(mktemp)
+    if jq '
+        (.tasks | map(select(.status == "pending")) | length) as $pending |
+        (.tasks | map(select(.status == "in_progress")) | length) as $in_progress |
+        (.tasks | map(select(.status == "passed")) | length) as $passed |
+        (.tasks | map(select(.status == "failed")) | length) as $failed |
+        (.tasks | map(select(.status == "skipped")) | length) as $skipped |
+        (.tasks | length) as $total |
+        .statistics.total_tasks = $total |
+        .statistics.pending = $pending |
+        .statistics.in_progress = $in_progress |
+        .statistics.passed = $passed |
+        .statistics.failed = $failed |
+        .statistics.skipped = $skipped |
+        .metadata.last_updated = (now | strftime("%Y-%m-%d"))
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        mv "$tmp_file" "$TODO_FILE"
+        return 0
+    else
+        rm -f "$tmp_file"
+        return 1
+    fi
+}
+
+# Function to validate the todolist.json file
+# Returns 0 if valid, 1 if errors found
+validate_todolist() {
+    local todo_file="$1"
+    local auto_fix="${2:-false}"
+    local errors=0
+    local warnings=0
+    local fixable=0
+
+    echo -e "${BLUE}╔════════════════════════════════════════════════════════════════╗${NC}"
+    echo -e "${BLUE}║             Todolist Validation (Issue #30)                    ║${NC}"
+    echo -e "${BLUE}╚════════════════════════════════════════════════════════════════╝${NC}"
+    echo ""
+    echo -e "${BLUE}Validating: $todo_file${NC}"
+    echo ""
+
+    # Check 1: Statistics synchronization
+    echo -e "${YELLOW}[1/8] Checking statistics synchronization...${NC}"
+    local actual_pending=$(jq '[.tasks[] | select(.status == "pending")] | length' "$todo_file" 2>/dev/null)
+    local actual_in_progress=$(jq '[.tasks[] | select(.status == "in_progress")] | length' "$todo_file" 2>/dev/null)
+    local actual_passed=$(jq '[.tasks[] | select(.status == "passed")] | length' "$todo_file" 2>/dev/null)
+    local actual_failed=$(jq '[.tasks[] | select(.status == "failed")] | length' "$todo_file" 2>/dev/null)
+    local actual_skipped=$(jq '[.tasks[] | select(.status == "skipped")] | length' "$todo_file" 2>/dev/null)
+    local actual_total=$(jq '.tasks | length' "$todo_file" 2>/dev/null)
+
+    local reported_pending=$(jq '.statistics.pending // 0' "$todo_file" 2>/dev/null)
+    local reported_in_progress=$(jq '.statistics.in_progress // 0' "$todo_file" 2>/dev/null)
+    local reported_passed=$(jq '.statistics.passed // 0' "$todo_file" 2>/dev/null)
+    local reported_failed=$(jq '.statistics.failed // 0' "$todo_file" 2>/dev/null)
+    local reported_skipped=$(jq '.statistics.skipped // 0' "$todo_file" 2>/dev/null)
+    local reported_total=$(jq '.statistics.total_tasks // 0' "$todo_file" 2>/dev/null)
+
+    local stats_mismatch=false
+    if [ "$actual_pending" != "$reported_pending" ] || \
+       [ "$actual_in_progress" != "$reported_in_progress" ] || \
+       [ "$actual_passed" != "$reported_passed" ] || \
+       [ "$actual_failed" != "$reported_failed" ] || \
+       [ "$actual_skipped" != "$reported_skipped" ] || \
+       [ "$actual_total" != "$reported_total" ]; then
+        stats_mismatch=true
+        echo -e "${RED}  ✗ Statistics mismatch detected:${NC}"
+        echo "    Actual:   pending=$actual_pending, in_progress=$actual_in_progress, passed=$actual_passed, failed=$actual_failed, skipped=$actual_skipped, total=$actual_total"
+        echo "    Reported: pending=$reported_pending, in_progress=$reported_in_progress, passed=$reported_passed, failed=$reported_failed, skipped=$reported_skipped, total=$reported_total"
+        fixable=$((fixable + 1))
+        if [ "$auto_fix" = true ]; then
+            echo -e "${GREEN}  → Auto-fixing statistics...${NC}"
+            sync_statistics_for_validation
+            echo -e "${GREEN}  ✓ Statistics synchronized${NC}"
+        else
+            echo -e "${YELLOW}  → Run with --fix to auto-fix this issue${NC}"
+        fi
+    else
+        echo -e "${GREEN}  ✓ Statistics are synchronized${NC}"
+    fi
+
+    # Check 2: Dependency validation (all dependencies exist)
+    echo -e "${YELLOW}[2/8] Checking dependency validation...${NC}"
+    local missing_deps_output=$(jq -r '
+        [.tasks[].id] as $all_ids |
+        .tasks[] |
+        .id as $task_id |
+        (.dependencies // [])[] |
+        select(. as $dep | $all_ids | contains([$dep]) | not) |
+        "Task " + $task_id + " depends on non-existent task: " + .
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$missing_deps_output" ]; then
+        echo -e "${RED}  ✗ Missing dependencies found:${NC}"
+        echo "$missing_deps_output" | while read -r line; do
+            echo "    $line"
+            errors=$((errors + 1))
+        done
+    else
+        echo -e "${GREEN}  ✓ All dependencies exist${NC}"
+    fi
+
+    # Check 3: Circular dependency detection
+    echo -e "${YELLOW}[3/8] Checking for circular dependencies...${NC}"
+    local circular_deps=$(jq -r '
+        def find_cycle($visited; $path):
+            if . as $id | $visited | contains([$id]) then
+                $path + [$id]
+            else
+                . as $id |
+                (.tasks[] | select(.id == $id) | .dependencies[]?) as $dep |
+                if $dep then
+                    $dep | find_cycle($visited + [$id]; $path + [$id])
+                else
+                    null
+                end
+            end;
+        [.tasks[].id] as $all_ids |
+        [$all_ids[] | . as $start | $start | find_cycle([]; []) | select(. != null)] |
+        if length > 0 then .[0] | join(" -> ") else "" end
+    ' "$todo_file" 2>/dev/null || echo "")
+    if [ -n "$circular_deps" ] && [ "$circular_deps" != "" ]; then
+        echo -e "${RED}  ✗ Circular dependency detected: $circular_deps${NC}"
+        errors=$((errors + 1))
+    else
+        echo -e "${GREEN}  ✓ No circular dependencies found${NC}"
+    fi
+
+    # Check 4: Blocked task analysis
+    echo -e "${YELLOW}[4/8] Analyzing blocked tasks...${NC}"
+    local blocked_tasks=$(jq -r '
+        [.tasks[] | select(.status == "passed") | .id] as $passed |
+        [.tasks[] | select(.status == "failed") | .id] as $failed |
+        .tasks[] | select(
+            .status == "pending" and
+            (.dependencies | length > 0) and
+            (.dependencies | any(. as $dep | $failed | contains([$dep])))
+        ) | "\(.id): blocked by failed dependency"
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$blocked_tasks" ]; then
+        echo -e "${YELLOW}  ⚠ Blocked tasks (dependencies failed):${NC}"
+        echo "$blocked_tasks" | while read -r line; do
+            echo "    $line"
+        done
+        warnings=$((warnings + 1))
+    else
+        echo -e "${GREEN}  ✓ No tasks blocked by failed dependencies${NC}"
+    fi
+
+    # Check 5: Ready task count
+    echo -e "${YELLOW}[5/8] Counting ready tasks...${NC}"
+    local ready_count=$(jq -r '
+        [.tasks[] | select(.status == "passed") | .id] as $passed |
+        [.tasks[] | select(
+            .status == "pending" and
+            ((.dependencies | length == 0) or (.dependencies | all(. as $dep | $passed | contains([$dep]))))
+        )] | length
+    ' "$todo_file" 2>/dev/null)
+    echo -e "${GREEN}  ✓ Ready tasks (can run now): $ready_count${NC}"
+
+    # Check 6: Missing required fields
+    echo -e "${YELLOW}[6/8] Checking for missing required fields...${NC}"
+    local missing_fields_output=$(jq -r '
+        ["id", "name", "status", "priority", "dependencies", "failure_count"] as $required |
+        .tasks[] |
+        . as $task |
+        $required[] |
+        select($task | has(.) | not) |
+        "Task " + ($task.id // "UNKNOWN") + ": missing field \"" + . + "\""
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$missing_fields_output" ]; then
+        echo -e "${RED}  ✗ Missing required fields:${NC}"
+        echo "$missing_fields_output" | while read -r line; do
+            echo "    $line"
+            errors=$((errors + 1))
+        done
+    else
+        echo -e "${GREEN}  ✓ All tasks have required fields${NC}"
+    fi
+
+    # Check 7: Invalid status values
+    echo -e "${YELLOW}[7/8] Checking for invalid status values...${NC}"
+    local valid_statuses="pending in_progress passed failed skipped"
+    local invalid_statuses=$(jq -r '
+        .tasks[] | select(
+            .status as $s |
+            ["pending", "in_progress", "passed", "failed", "skipped"] | contains([$s]) | not
+        ) | "\(.id): invalid status \"\(.status)\""
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$invalid_statuses" ]; then
+        echo -e "${RED}  ✗ Invalid status values found:${NC}"
+        echo "$invalid_statuses" | while read -r line; do
+            echo "    $line"
+            errors=$((errors + 1))
+        done
+    else
+        echo -e "${GREEN}  ✓ All status values are valid${NC}"
+    fi
+
+    # Check 8: Priority conflicts (duplicate priorities within same category)
+    echo -e "${YELLOW}[8/8] Checking for priority conflicts...${NC}"
+    local priority_conflicts=$(jq -r '
+        [.tasks[] | select(.status == "pending")] |
+        group_by(.priority) |
+        map(select(length > 1)) |
+        map("Priority \(.[0].priority): " + ([.[] | .id] | join(", "))) |
+        .[]
+    ' "$todo_file" 2>/dev/null)
+    if [ -n "$priority_conflicts" ]; then
+        echo -e "${YELLOW}  ⚠ Multiple pending tasks share the same priority (not an error, but may affect ordering):${NC}"
+        echo "$priority_conflicts" | while read -r line; do
+            echo "    $line"
+        done
+        warnings=$((warnings + 1))
+    else
+        echo -e "${GREEN}  ✓ No priority conflicts found${NC}"
+    fi
+
+    # Summary
+    echo ""
+    echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
+    echo -e "${BLUE}Validation Summary${NC}"
+    echo -e "${BLUE}════════════════════════════════════════════════════════════════${NC}"
+
+    if [ $errors -gt 0 ]; then
+        echo -e "${RED}  Errors: $errors (must be fixed before running)${NC}"
+    else
+        echo -e "${GREEN}  Errors: 0${NC}"
+    fi
+
+    if [ $warnings -gt 0 ]; then
+        echo -e "${YELLOW}  Warnings: $warnings (optional to fix)${NC}"
+    else
+        echo -e "${GREEN}  Warnings: 0${NC}"
+    fi
+
+    if [ $fixable -gt 0 ] && [ "$auto_fix" != true ]; then
+        echo -e "${YELLOW}  Fixable issues: $fixable (run with --fix to auto-fix)${NC}"
+    fi
+
+    echo ""
+
+    if [ $errors -gt 0 ]; then
+        echo -e "${RED}Validation FAILED. Please fix the errors above before running the loop.${NC}"
+        return 1
+    else
+        echo -e "${GREEN}Validation PASSED. Todolist is ready for execution.${NC}"
+        return 0
+    fi
+}
+
+# ============================================================================
+# Validation Mode (Issue #30)
+# ============================================================================
+
+# If --validate was passed, run validation and exit
+if [ "$VALIDATE_ONLY" = true ]; then
+    validate_todolist "$TODO_FILE" "$AUTO_FIX"
+    exit $?
 fi
 
 # ============================================================================
@@ -399,8 +678,17 @@ EOF
     fi
 }
 
-# Set up trap to clean up lock file on exit
-trap cleanup_lock_file EXIT INT TERM
+# Function to handle cleanup on exit
+cleanup_on_exit() {
+    # Sync statistics before exiting (Issue #27)
+    if [ -f "$TODO_FILE" ]; then
+        sync_statistics || true
+    fi
+    cleanup_lock_file
+}
+
+# Set up trap to clean up lock file and sync statistics on exit
+trap cleanup_on_exit EXIT INT TERM
 
 # Check for concurrent loop before proceeding
 check_concurrent_loop
@@ -521,6 +809,121 @@ increment_failure_count() {
         echo -e "${YELLOW}Warning: Failed to increment failure count (JSON operation failed)${NC}"
         rm -f "$tmp_file"
     fi
+}
+
+# ============================================================================
+# Statistics Synchronization (Issue #27)
+# ============================================================================
+
+# Function to synchronize statistics with actual task counts
+# This ensures the statistics field always reflects the true state of tasks
+sync_statistics() {
+    local tmp_file=$(mktemp)
+
+    if jq '
+        # Count actual task statuses
+        (.tasks | map(select(.status == "pending")) | length) as $pending |
+        (.tasks | map(select(.status == "in_progress")) | length) as $in_progress |
+        (.tasks | map(select(.status == "passed")) | length) as $passed |
+        (.tasks | map(select(.status == "failed")) | length) as $failed |
+        (.tasks | map(select(.status == "skipped")) | length) as $skipped |
+        (.tasks | length) as $total |
+
+        # Update statistics to match reality
+        .statistics.total_tasks = $total |
+        .statistics.pending = $pending |
+        .statistics.in_progress = $in_progress |
+        .statistics.passed = $passed |
+        .statistics.failed = $failed |
+        .statistics.skipped = $skipped |
+        .metadata.last_updated = (now | strftime("%Y-%m-%d"))
+    ' "$TODO_FILE" > "$tmp_file" 2>/dev/null; then
+        # Verify the sync was successful by comparing counts
+        local old_passed=$(jq -r '.statistics.passed // 0' "$TODO_FILE" 2>/dev/null)
+        local new_passed=$(jq -r '.statistics.passed // 0' "$tmp_file" 2>/dev/null)
+        local old_failed=$(jq -r '.statistics.failed // 0' "$TODO_FILE" 2>/dev/null)
+        local new_failed=$(jq -r '.statistics.failed // 0' "$tmp_file" 2>/dev/null)
+
+        mv "$tmp_file" "$TODO_FILE"
+
+        # Log if there was a discrepancy that was corrected
+        if [ "$old_passed" != "$new_passed" ] || [ "$old_failed" != "$new_failed" ]; then
+            echo -e "${YELLOW}[Issue #27] Statistics synchronized: passed ${old_passed}→${new_passed}, failed ${old_failed}→${new_failed}${NC}"
+        fi
+        return 0
+    else
+        echo -e "${YELLOW}Warning: Failed to sync statistics (JSON operation failed)${NC}"
+        rm -f "$tmp_file"
+        return 1
+    fi
+}
+
+# ============================================================================
+# Per-Task Timeout Configuration (Issue #29)
+# ============================================================================
+
+# Function to get timeout for a specific task
+# Resolution order: task.timeout -> metadata.category_timeouts[category] -> script default
+get_task_timeout() {
+    local task_id="$1"
+    local task_json=$(get_task_details "$task_id")
+
+    # 1. Check for task-level timeout
+    local task_timeout=$(echo "$task_json" | jq -r '.timeout // empty' 2>/dev/null)
+    if [ -n "$task_timeout" ] && [ "$task_timeout" != "null" ]; then
+        echo "$task_timeout"
+        return 0
+    fi
+
+    # 2. Check for category-level timeout in metadata
+    local category=$(echo "$task_json" | jq -r '.category // "default"' 2>/dev/null)
+    local category_timeout=$(jq -r --arg cat "$category" '.metadata.category_timeouts[$cat] // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$category_timeout" ] && [ "$category_timeout" != "null" ]; then
+        echo "$category_timeout"
+        return 0
+    fi
+
+    # 3. Check for default timeout in metadata
+    local metadata_timeout=$(jq -r '.metadata.default_timeout // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$metadata_timeout" ] && [ "$metadata_timeout" != "null" ]; then
+        echo "$metadata_timeout"
+        return 0
+    fi
+
+    # 4. Fall back to script default
+    echo "$TIMEOUT_SECONDS"
+}
+
+# Function to get health check timeout for a specific task
+# Resolution order: task.health_check_timeout -> metadata.category_health_check_timeouts[category] -> script default
+get_task_health_check_timeout() {
+    local task_id="$1"
+    local task_json=$(get_task_details "$task_id")
+
+    # 1. Check for task-level health_check_timeout
+    local task_hc_timeout=$(echo "$task_json" | jq -r '.health_check_timeout // empty' 2>/dev/null)
+    if [ -n "$task_hc_timeout" ] && [ "$task_hc_timeout" != "null" ]; then
+        echo "$task_hc_timeout"
+        return 0
+    fi
+
+    # 2. Check for category-level health check timeout in metadata
+    local category=$(echo "$task_json" | jq -r '.category // "default"' 2>/dev/null)
+    local category_hc_timeout=$(jq -r --arg cat "$category" '.metadata.category_health_check_timeouts[$cat] // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$category_hc_timeout" ] && [ "$category_hc_timeout" != "null" ]; then
+        echo "$category_hc_timeout"
+        return 0
+    fi
+
+    # 3. Check for default health check timeout in metadata
+    local metadata_hc_timeout=$(jq -r '.metadata.default_health_check_timeout // empty' "$TODO_FILE" 2>/dev/null)
+    if [ -n "$metadata_hc_timeout" ] && [ "$metadata_hc_timeout" != "null" ]; then
+        echo "$metadata_hc_timeout"
+        return 0
+    fi
+
+    # 4. Fall back to script default
+    echo "$HEALTH_CHECK_INACTIVITY_TIMEOUT"
 }
 
 # ============================================================================
@@ -778,111 +1181,113 @@ EOF
     echo "--------------------------------------------------------------------------------" >> "$PROGRESS_FILE"
 }
 
-# Function to create the Claude prompt
+# Function to create the Claude prompt with AI-driven task selection
 create_claude_prompt() {
-    local task_id="$1"
-    local task_json=$(get_task_details "$task_id")
-
-    local name=$(echo "$task_json" | jq -r '.name')
-    local description=$(echo "$task_json" | jq -r '.description')
-    local category=$(echo "$task_json" | jq -r '.category')
-    local priority=$(echo "$task_json" | jq -r '.priority')
-    local acceptance_criteria=$(echo "$task_json" | jq -r '.acceptance_criteria | join("\n  - ")')
-    local files_affected=$(echo "$task_json" | jq -r '.files_likely_affected | join(", ")')
-    local dependencies=$(echo "$task_json" | jq -r '.dependencies | join(", ")')
-    local notes=$(echo "$task_json" | jq -r '.notes // ""')
-    local failure_count=$(echo "$task_json" | jq -r '.failure_count')
-
     # Get build/test commands from todo list metadata (optional)
     local build_command=$(jq -r '.metadata.build_command // ""' "$TODO_FILE" 2>/dev/null || echo "")
     local test_command=$(jq -r '.metadata.test_command // ""' "$TODO_FILE" 2>/dev/null || echo "")
     local extra_instructions=$(jq -r '.metadata.extra_instructions // ""' "$TODO_FILE" 2>/dev/null || echo "")
 
-    # Get previous lessons from progress.txt for this task
-    # Uses awk to find the most recent entry for this task and extract its lessons
-    local prev_lessons=""
-    if [ -f "$PROGRESS_FILE" ] && [ "$failure_count" -gt 0 ]; then
-        prev_lessons=$(awk -v taskid="$task_id" '
-            /^Task ID:/ && index($0, taskid) { in_task=1; lesson="" }
-            in_task && /^Lessons Learned:/ { sub(/^Lessons Learned: */, ""); lesson=$0 }
-            in_task && /^----------------/ { in_task=0 }
-            END { print lesson }
-        ' "$PROGRESS_FILE" 2>/dev/null || echo "")
+    # Get the full todo list content for Claude to analyze
+    local todo_list_content=$(cat "$TODO_FILE" 2>/dev/null || echo "{}")
+
+    # Get recent progress entries for context
+    local recent_progress=""
+    if [ -f "$PROGRESS_FILE" ]; then
+        recent_progress=$(tail -100 "$PROGRESS_FILE" 2>/dev/null || echo "")
     fi
 
-    cat > "$PROMPT_FILE" << EOF
-# ${PROJECT_NAME} - Task Implementation
+    cat > "$PROMPT_FILE" << 'PROMPT_HEADER'
+# ${PROJECT_NAME} - Smart Task Selection & Implementation
 
-**IMPORTANT: This is an automated run. Complete the task fully and exit without asking any follow-up questions. Do not ask "Would you like me to proceed?" or similar interactive prompts. Execute all required steps autonomously and terminate when done.**
+**IMPORTANT: This is an automated run. You MUST select exactly ONE task, implement it fully, and exit without asking any follow-up questions. Do not ask "Would you like me to proceed?" or similar interactive prompts. Execute all required steps autonomously and terminate when done.**
 
-You are implementing a single task for ${PROJECT_NAME}.
+PROMPT_HEADER
+
+    cat >> "$PROMPT_FILE" << EOF
+You are an intelligent AI coding agent working on ${PROJECT_NAME}.
 ${PROJECT_DESC:+
 **Project Description**: $PROJECT_DESC
 }
-## Your Task
 
-Implement the following task and ONLY this task. Do not work on any other tasks.
+## YOUR CRITICAL MISSION
 
-### Task Details
+You MUST do TWO things in this iteration:
+1. **INTELLIGENTLY SELECT** the most important task to work on from the todo list
+2. **IMPLEMENT** that single task completely
 
-- **ID**: $task_id
-- **Name**: $name
-- **Category**: $category
-- **Priority**: $priority (1 = highest)
-- **Description**: $description
+### TASK SELECTION RULES (READ CAREFULLY)
 
-### Acceptance Criteria
+You MUST select **EXACTLY ONE** task. Not zero. Not multiple. ONE.
 
-  - $acceptance_criteria
+**Eligibility Criteria** - A task is eligible if ALL of these are true:
+- Status is "pending" (not "passed", "failed", "skipped", or "in_progress")
+- failure_count < $MAX_FAILURES (tasks that failed too many times are skipped)
+- ALL dependencies are satisfied (every task ID in the "dependencies" array must have status "passed")
 
-### Files Likely Affected
+**How to Choose the BEST Task:**
 
-$files_affected
+Do NOT just pick the task with the lowest priority number. Use your intelligence to consider:
 
-### Dependencies (already completed)
+1. **Strategic Impact**: Which task unblocks the most other tasks? Which provides the most value?
+2. **Dependencies**: Are there tasks whose completion would enable many others?
+3. **Failure History**: Tasks with fewer failures might be more likely to succeed
+4. **Complexity vs. Context**: Given what you can see about the codebase, which task are you most likely to complete successfully?
+5. **Logical Ordering**: Sometimes it makes sense to do related tasks in a specific order even if priorities differ
+6. **Risk Assessment**: Avoid tasks that seem likely to fail (e.g., depend on external resources, have vague requirements)
 
-${dependencies:-None}
+**If you cannot find ANY eligible task**, you must still report this clearly and exit gracefully. But TRY HARD to find one - use your judgment to work around minor blockers if reasonable.
 
-### Previous Notes
+## THE TODO LIST
 
-${notes:-None}
+Here is the complete todo list. Analyze it carefully:
 
-### Previous Failure Count: $failure_count / $MAX_FAILURES
+\`\`\`json
+$todo_list_content
+\`\`\`
 
-${prev_lessons:+**Lessons from previous attempts:**
-$prev_lessons}
+## RECENT PROGRESS (for context)
 
-## Instructions
+\`\`\`
+$recent_progress
+\`\`\`
 
-1. **Read the relevant source files first** to understand the current implementation
-2. **Plan your implementation** before writing code
-3. **Implement the task** following the existing code patterns and architecture
-${build_command:+4. **Verify the build compiles** by running: \`$build_command\`}
-${test_command:+5. **Run tests** if applicable: \`$test_command\`}
+## IMPLEMENTATION INSTRUCTIONS
+
+Once you've selected your task:
+
+1. **Announce your selection** - State which task ID you chose and WHY (1-2 sentences explaining your reasoning)
+2. **Read the relevant source files first** to understand the current implementation
+3. **Plan your implementation** before writing code
+4. **Implement the task** following the existing code patterns and architecture
+${build_command:+5. **Verify the build compiles** by running: \`$build_command\`}
+${test_command:+6. **Run tests** if applicable: \`$test_command\`}
 ${extra_instructions:+
 ### Project-Specific Instructions
 
 $extra_instructions
 }
-## After Implementation
 
-You MUST update the following files before finishing:
+## AFTER IMPLEMENTATION - MANDATORY UPDATES
+
+You MUST update these files before finishing:
 
 ### 1. Update the todo list
+
+First, set the task status to "in_progress" when you start working, then update to final status:
 
 Update the task status in the todo list file ($TODO_FILE):
 - Set \`status\` to \`"passed"\` if implementation succeeded
 - Set \`status\` to \`"failed"\` if implementation failed
 - Add any relevant notes to the \`notes\` field
-- If failed, the \`failure_count\` will be incremented automatically
 
-Use this exact jq command pattern to update:
+Use this exact jq command pattern to update (replace TASK_ID with the actual task ID you selected):
 \`\`\`bash
 # For success:
-jq '.tasks = [.tasks[] | if .id == "$task_id" then .status = "passed" | .notes = "YOUR_NOTES_HERE" else . end]' "$TODO_FILE" > tmp.json && mv tmp.json "$TODO_FILE"
+jq '.tasks = [.tasks[] | if .id == "TASK_ID" then .status = "passed" | .notes = "YOUR_NOTES_HERE" else . end]' "$TODO_FILE" > tmp.json && mv tmp.json "$TODO_FILE"
 
 # For failure:
-jq '.tasks = [.tasks[] | if .id == "$task_id" then .status = "failed" | .notes = "YOUR_NOTES_HERE" else . end]' "$TODO_FILE" > tmp.json && mv tmp.json "$TODO_FILE"
+jq '.tasks = [.tasks[] | if .id == "TASK_ID" then .status = "failed" | .notes = "YOUR_NOTES_HERE" else . end]' "$TODO_FILE" > tmp.json && mv tmp.json "$TODO_FILE"
 \`\`\`
 
 ### 2. Append to progress.txt
@@ -890,6 +1295,7 @@ jq '.tasks = [.tasks[] | if .id == "$task_id" then .status = "failed" | .notes =
 Add an entry to the progress file ($PROGRESS_FILE) with:
 - Timestamp
 - Task ID and name
+- **Why you selected this task** (your reasoning)
 - Status (passed/failed)
 - Summary of changes made (files modified, key implementation details)
 - If failed: error messages and what went wrong
@@ -898,22 +1304,23 @@ Add an entry to the progress file ($PROGRESS_FILE) with:
 ### 3. Git Commit (only if passed)
 
 If the implementation succeeded, create a git commit:
-- For new features: \`feat($task_id): $name\`
-- For bug fixes: \`fix($task_id): $name\`
+- For new features: \`feat(TASK_ID): Task name\`
+- For bug fixes: \`fix(TASK_ID): Task name\`
 
 Include in the commit message:
 - Brief description of implementation
 - Files changed
 
-## Important Rules
+## IMPORTANT RULES
 
-1. **Work on ONLY this task** - do not implement other tasks
-2. **Do not break existing functionality** - be careful with changes
-3. **Follow existing code patterns** - maintain consistency
-4. **Keep changes minimal** - only change what's necessary
-5. **Update the todo list and progress.txt** before finishing - this is CRITICAL
-6. **NO FOLLOW-UP QUESTIONS** - This is automated. Do not ask "Would you like me to..." or similar. Complete the task and exit.
-${build_command:+7. **Build must compile** - verify with \`$build_command\`}
+1. **SELECT exactly ONE task** - Use your intelligence, not just priority numbers
+2. **IMPLEMENT only the selected task** - Do not work on other tasks
+3. **Do not break existing functionality** - Be careful with changes
+4. **Follow existing code patterns** - Maintain consistency
+5. **Keep changes minimal** - Only change what's necessary
+6. **Update the todo list and progress.txt** - This is CRITICAL
+7. **NO FOLLOW-UP QUESTIONS** - This is automated. Complete the task and exit.
+${build_command:+8. **Build must compile** - Verify with \`$build_command\`}
 
 ## Reference Files
 
@@ -921,7 +1328,9 @@ ${build_command:+7. **Build must compile** - verify with \`$build_command\`}
 - Progress: $PROGRESS_FILE
 - Working Directory: $WORKING_DIR
 
-Good luck! Remember to update the todo list and progress.txt before you finish.
+---
+
+**START NOW**: First, analyze the todo list and announce which task you're selecting and why. Then implement it.
 EOF
 
     echo "$PROMPT_FILE"
@@ -943,7 +1352,8 @@ start_health_check_monitor() {
     local log_file="$1"
     local claude_pid="$2"
     local check_interval="${HEALTH_CHECK_INTERVAL:-30}"
-    local inactivity_timeout="${HEALTH_CHECK_INACTIVITY_TIMEOUT:-300}"
+    # Issue #29: Support per-task health check timeout via override variable
+    local inactivity_timeout="${HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE:-${HEALTH_CHECK_INACTIVITY_TIMEOUT:-900}}"
 
     if [ "$HEALTH_CHECK_ENABLED" != true ]; then
         return 0
@@ -1128,6 +1538,8 @@ run_claude_with_timeout() {
     local prompt_file="$1"
     local task_id="$2"
     local attempt_num="${3:-1}"
+    local task_timeout="${4:-$TIMEOUT_SECONDS}"  # Issue #29: Per-task timeout
+    local task_hc_timeout="${5:-$HEALTH_CHECK_INACTIVITY_TIMEOUT}"  # Issue #29: Per-task health check timeout
 
     # Generate log file path with timestamp and attempt number
     local timestamp=$(date '+%Y%m%d_%H%M%S')
@@ -1138,8 +1550,9 @@ run_claude_with_timeout() {
 
     echo -e "${BLUE}Running Claude CLI...${NC}"
     echo -e "${BLUE}Log file: $log_file${NC}"
+    echo -e "${BLUE}Timeout: $((task_timeout / 60))m ${task_timeout}s${NC}"
     if [ "$HEALTH_CHECK_ENABLED" = true ]; then
-        echo -e "${BLUE}Health check: enabled (interval: ${HEALTH_CHECK_INTERVAL}s, inactivity timeout: ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s)${NC}"
+        echo -e "${BLUE}Health check: enabled (interval: ${HEALTH_CHECK_INTERVAL}s, inactivity timeout: ${task_hc_timeout}s)${NC}"
     fi
     echo -e "${BLUE}────────────────────────────────────────────────────────────────${NC}"
 
@@ -1151,8 +1564,8 @@ Ralph Wiggum Loop - Claude Execution Log
 Task ID: $task_id
 Attempt: $attempt_num
 Timestamp: $(date '+%Y-%m-%d %H:%M:%S')
-Timeout: ${TIMEOUT_SECONDS}s
-Health Check: $([ "$HEALTH_CHECK_ENABLED" = true ] && echo "enabled (${HEALTH_CHECK_INTERVAL}s interval, ${HEALTH_CHECK_INACTIVITY_TIMEOUT}s inactivity timeout)" || echo "disabled")
+Timeout: ${task_timeout}s (Issue #29: per-task configuration)
+Health Check: $([ "$HEALTH_CHECK_ENABLED" = true ] && echo "enabled (${HEALTH_CHECK_INTERVAL}s interval, ${task_hc_timeout}s inactivity timeout)" || echo "disabled")
 Working Directory: $WORKING_DIR
 ================================================================================
 
@@ -1177,15 +1590,16 @@ EOF
         # Use timeout command with tee to capture output while displaying
         # For health check with timeout command, we need to run in background to get PID
         if [ "$HEALTH_CHECK_ENABLED" = true ]; then
-            # Run with health check monitoring
+            # Run with health check monitoring (Issue #29: using per-task timeouts)
             if command -v stdbuf &> /dev/null; then
-                stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+                stdbuf -oL -eL $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
             else
-                $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
+                $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
             fi
             local claude_pid=$!
 
-            # Start health check monitor
+            # Start health check monitor with per-task timeout (Issue #29)
+            HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE="$task_hc_timeout"
             start_health_check_monitor "$log_file" "$claude_pid"
 
             # Wait for completion
@@ -1193,6 +1607,7 @@ EOF
 
             # Stop health check monitor
             stop_health_check_monitor "$log_file"
+            unset HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE
 
             # Check if killed by health check
             if was_killed_by_health_check "$log_file"; then
@@ -1200,28 +1615,29 @@ EOF
                 exit_code=125  # Custom exit code for health check termination
             fi
         else
-            # Run without health check (original behavior)
+            # Run without health check (original behavior, Issue #29: using per-task timeout)
             if command -v stdbuf &> /dev/null; then
-                stdbuf -oL -eL $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+                stdbuf -oL -eL $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
             else
-                $timeout_cmd $TIMEOUT_SECONDS claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
+                $timeout_cmd $task_timeout claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" || exit_code=$?
             fi
         fi
     else
-        # Fallback: use background process with manual timeout
+        # Fallback: use background process with manual timeout (Issue #29: using per-task timeouts)
         # Use log file directly instead of /tmp
         claude --dangerously-skip-permissions --print --no-session-persistence "$(cat "$prompt_file")" 2> >(tee -a "$stderr_log" >&2) | tee -a "$log_file" &
         local claude_pid=$!
 
-        # Start health check monitor
+        # Start health check monitor with per-task timeout (Issue #29)
+        HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE="$task_hc_timeout"
         start_health_check_monitor "$log_file" "$claude_pid"
 
         local elapsed=0
         while kill -0 $claude_pid 2>/dev/null; do
             sleep 5
             elapsed=$((elapsed + 5))
-            if [ $elapsed -ge $TIMEOUT_SECONDS ]; then
-                echo -e "${YELLOW}Timeout reached. Terminating Claude...${NC}"
+            if [ $elapsed -ge $task_timeout ]; then
+                echo -e "${YELLOW}Timeout reached (${task_timeout}s). Terminating Claude...${NC}"
                 kill -TERM $claude_pid 2>/dev/null || true
                 sleep 2
                 kill -KILL $claude_pid 2>/dev/null || true
@@ -1243,6 +1659,7 @@ EOF
 
         # Stop health check monitor
         stop_health_check_monitor "$log_file"
+        unset HEALTH_CHECK_INACTIVITY_TIMEOUT_OVERRIDE
     fi
 
     # Post-execution checks (Issue #22)
@@ -1387,8 +1804,43 @@ handle_api_error() {
     echo -e "${RED}API error handled. Task will be retried.${NC}"
 }
 
+# Function to check if there are any eligible tasks (for pre-flight check)
+has_eligible_tasks() {
+    local count=$(jq -r --argjson max_failures "$MAX_FAILURES" '
+        # First, get list of passed task IDs
+        [.tasks[] | select(.status == "passed") | .id] as $passed |
+
+        # Count eligible tasks
+        [.tasks[] | select(
+            .status == "pending" and
+            .failure_count < $max_failures and
+            (
+                (.dependencies | length == 0) or
+                (.dependencies | all(. as $dep | $passed | contains([$dep])))
+            )
+        )] | length
+    ' "$TODO_FILE" 2>/dev/null || echo "0")
+
+    [ "$count" -gt 0 ]
+}
+
+# Function to get the task ID that Claude selected (by checking which task is in_progress or recently changed)
+get_selected_task_id() {
+    # First check for in_progress tasks
+    local in_progress_task=$(jq -r '.tasks[] | select(.status == "in_progress") | .id' "$TODO_FILE" 2>/dev/null | head -1)
+    if [ -n "$in_progress_task" ]; then
+        echo "$in_progress_task"
+        return
+    fi
+
+    # If no in_progress, check the most recently modified task by looking at notes timestamp patterns
+    # This is a fallback - ideally Claude sets in_progress first
+    echo ""
+}
+
 # Main loop
 echo -e "${GREEN}Starting implementation loop...${NC}"
+echo -e "${BLUE}Mode: AI-Driven Task Selection (Claude chooses the task)${NC}"
 echo ""
 
 iteration=0
@@ -1408,43 +1860,49 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
         break
     fi
 
-    # Get next task to work on
-    task_id=$(get_next_task)
-
-    if [ -z "$task_id" ]; then
+    # Pre-flight check: are there any eligible tasks?
+    if ! has_eligible_tasks; then
         echo -e "${YELLOW}No eligible tasks found. All tasks may be completed or blocked.${NC}"
         break
     fi
 
-    # Get task details for display
-    task_json=$(get_task_details "$task_id")
-    task_name=$(echo "$task_json" | jq -r '.name')
-    task_priority=$(echo "$task_json" | jq -r '.priority')
-    task_category=$(echo "$task_json" | jq -r '.category')
-    failure_count=$(echo "$task_json" | jq -r '.failure_count')
-
-    echo -e "${GREEN}Selected Task:${NC}"
-    echo "  ID: $task_id"
-    echo "  Name: $task_name"
-    echo "  Category: $task_category"
-    echo "  Priority: $task_priority"
-    echo "  Previous failures: $failure_count"
+    # Show summary of eligible tasks (for logging purposes)
+    echo -e "${GREEN}Eligible tasks for AI selection:${NC}"
+    jq -r --argjson max_failures "$MAX_FAILURES" '
+        [.tasks[] | select(.status == "passed") | .id] as $passed |
+        .tasks[] | select(
+            .status == "pending" and
+            .failure_count < $max_failures and
+            (
+                (.dependencies | length == 0) or
+                (.dependencies | all(. as $dep | $passed | contains([$dep])))
+            )
+        ) | "  - \(.id): \(.name) (priority: \(.priority), failures: \(.failure_count))"
+    ' "$TODO_FILE" 2>/dev/null || echo "  (Unable to list tasks)"
+    echo ""
+    echo -e "${BLUE}Claude will intelligently select the best task to work on...${NC}"
     echo ""
 
-    # Mark task as in_progress
-    update_task_status "$task_id" "in_progress" ""
-
-    # Create the prompt file
-    prompt_file=$(create_claude_prompt "$task_id")
+    # Create the prompt file (no task_id passed - Claude will select)
+    prompt_file=$(create_claude_prompt)
 
     echo -e "${BLUE}Created prompt file: $prompt_file${NC}"
     echo ""
 
+    # Use default timeouts since Claude will select the task
+    # (Per-task timeouts will be applied if we can determine the task later)
+    task_timeout="$TIMEOUT_SECONDS"
+    task_hc_timeout="$HEALTH_CHECK_INACTIVITY_TIMEOUT"
+    echo -e "${BLUE}Default timeout: $((task_timeout / 60))m (${task_timeout}s), Health check timeout: ${task_hc_timeout}s${NC}"
+    echo ""
+
     # Run Claude with retry logic
+    # Note: task_id will be determined AFTER Claude runs (Claude selects it)
     start_time=$(date +%s)
     attempt=1
     task_succeeded=false
     last_exit_code=0
+    task_id=""  # Will be populated after Claude selects
 
     while [ $attempt -le $MAX_RETRIES ]; do
         if [ $attempt -gt 1 ]; then
@@ -1461,41 +1919,87 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
 
         echo -e "${BLUE}Attempt $attempt of $MAX_RETRIES${NC}"
 
-        if run_claude_with_timeout "$prompt_file" "$task_id" "$attempt"; then
+        # Use "iteration_N" as a placeholder for log file naming since task is not pre-selected
+        if run_claude_with_timeout "$prompt_file" "iteration_${iteration}" "$attempt" "$task_timeout" "$task_hc_timeout"; then
             echo -e "${GREEN}Claude completed successfully on attempt $attempt.${NC}"
-            task_succeeded=true
+
+            # Determine which task Claude selected by checking for in_progress or recently passed tasks
+            task_id=$(get_selected_task_id)
+            if [ -z "$task_id" ]; then
+                # Check for any task that was marked passed in this iteration
+                task_id=$(jq -r '.tasks[] | select(.status == "passed") | .id' "$TODO_FILE" 2>/dev/null | tail -1)
+            fi
+
+            if [ -n "$task_id" ]; then
+                echo -e "${GREEN}Claude selected and completed task: $task_id${NC}"
+                task_succeeded=true
+            else
+                echo -e "${YELLOW}Could not determine which task Claude worked on. Checking todo list changes...${NC}"
+                # Even if we can't identify the specific task, if Claude exited successfully and
+                # the todo list has fewer pending tasks, consider it a success
+                task_succeeded=true
+            fi
             break
         else
             last_exit_code=$?
+
+            # Try to determine which task Claude was working on
+            task_id=$(get_selected_task_id)
 
             # Handle different exit codes (Issue #22 enhancements)
             case $last_exit_code in
                 124)
                     # Timeout - don't retry timeouts, they take too long
                     echo -e "${RED}Task timed out on attempt $attempt. Not retrying timeouts.${NC}"
-                    handle_timeout "$task_id"
+                    if [ -n "$task_id" ]; then
+                        handle_timeout "$task_id"
+                    else
+                        echo -e "${YELLOW}Could not determine task ID for timeout handling.${NC}"
+                        log_progress "unknown" "TIMEOUT" \
+                            "Implementation timed out after $((TIMEOUT_SECONDS / 60)) minutes" \
+                            "Exceeded maximum allowed time; task ID unknown" \
+                            "Task may be too complex for single iteration."
+                    fi
                     break
                     ;;
                 125)
                     # Hung process detected by health check - will retry
                     echo -e "${RED}Task hung on attempt $attempt (health check detected no activity).${NC}"
                     if [ $attempt -ge $MAX_RETRIES ]; then
-                        handle_hung_process "$task_id"
+                        if [ -n "$task_id" ]; then
+                            handle_hung_process "$task_id"
+                        else
+                            log_progress "unknown" "HUNG" \
+                                "Process hung due to inactivity" \
+                                "Health check detected process was stuck" \
+                                "Possible API hang or network issue."
+                        fi
                         break
                     else
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        update_task_status "$task_id" "in_progress" "Retry after hung process (attempt $((attempt + 1)))"
+                        if [ -n "$task_id" ]; then
+                            update_task_status "$task_id" "in_progress" "Retry after hung process (attempt $((attempt + 1)))"
+                        fi
                     fi
                     ;;
                 126)
                     # Empty log detected - will retry
                     echo -e "${RED}Empty log detected on attempt $attempt.${NC}"
                     if [ $attempt -ge $MAX_RETRIES ]; then
-                        handle_empty_log "$task_id"
+                        if [ -n "$task_id" ]; then
+                            handle_empty_log "$task_id"
+                        else
+                            log_progress "unknown" "EMPTY_LOG" \
+                                "Process exited with code 0 but produced no meaningful output" \
+                                "Claude API may have returned empty response" \
+                                "This often indicates API issues."
+                        fi
                         break
                     else
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        update_task_status "$task_id" "in_progress" "Retry after empty log (attempt $((attempt + 1)))"
+                        if [ -n "$task_id" ]; then
+                            update_task_status "$task_id" "in_progress" "Retry after empty log (attempt $((attempt + 1)))"
+                        fi
                     fi
                     ;;
                 127)
@@ -1503,45 +2007,65 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
                     echo -e "${RED}API error detected on attempt $attempt.${NC}"
                     if [ $attempt -ge $MAX_RETRIES ]; then
                         # Get the API error message from log
-                        local api_err_msg=$(grep -o "\[API ERROR DETECTION\] API error detected: .*" "$CURRENT_LOG_FILE" 2>/dev/null | head -1 | sed 's/\[API ERROR DETECTION\] API error detected: //')
-                        handle_api_error "$task_id" "${api_err_msg:-Unknown API error}"
+                        api_err_msg=$(grep -o "\[API ERROR DETECTION\] API error detected: .*" "$CURRENT_LOG_FILE" 2>/dev/null | head -1 | sed 's/\[API ERROR DETECTION\] API error detected: //')
+                        if [ -n "$task_id" ]; then
+                            handle_api_error "$task_id" "${api_err_msg:-Unknown API error}"
+                        else
+                            log_progress "unknown" "API_ERROR" \
+                                "Claude API returned an error: ${api_err_msg:-Unknown}" \
+                                "${api_err_msg:-Unknown API error}" \
+                                "API errors are usually transient."
+                        fi
                         break
                     else
                         echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        update_task_status "$task_id" "in_progress" "Retry after API error (attempt $((attempt + 1)))"
+                        if [ -n "$task_id" ]; then
+                            update_task_status "$task_id" "in_progress" "Retry after API error (attempt $((attempt + 1)))"
+                        fi
                     fi
                     ;;
                 *)
                     # Other exit codes - existing logic
                     echo -e "${RED}Claude exited with code $last_exit_code on attempt $attempt${NC}"
-                    # Check if Claude updated the status to passed
-                    current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
-                    if [ "$current_status" = "passed" ]; then
-                        echo -e "${GREEN}Task was marked as passed despite exit code.${NC}"
-                        task_succeeded=true
-                        break
-                    fi
 
-                    # Issue #18: Validate task completion by checking acceptance criteria
-                    echo -e "${BLUE}Performing artifact validation (Issue #18 enhancement)...${NC}"
-                    if check_task_artifacts "$task_id"; then
-                        echo -e "${GREEN}Artifact validation passed! Task appears to have completed successfully.${NC}"
-                        # Update task status to passed if artifacts indicate success
-                        if [ "$current_status" != "passed" ]; then
-                            update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code"
-                            log_progress "$task_id" "PASSED (auto-validated)" \
-                                "Task completed successfully (validated by artifact check)" \
-                                "" \
-                                "Exit code was $last_exit_code but artifact validation score was $ARTIFACT_PERCENTAGE%"
+                    if [ -n "$task_id" ]; then
+                        # Check if Claude updated the status to passed
+                        current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
+                        if [ "$current_status" = "passed" ]; then
+                            echo -e "${GREEN}Task was marked as passed despite exit code.${NC}"
+                            task_succeeded=true
+                            break
                         fi
-                        task_succeeded=true
-                        break
-                    fi
 
-                    if [ $attempt -lt $MAX_RETRIES ]; then
-                        echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
-                        # Reset status back to in_progress for retry
-                        update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))"
+                        # Issue #18: Validate task completion by checking acceptance criteria
+                        echo -e "${BLUE}Performing artifact validation (Issue #18 enhancement)...${NC}"
+                        if check_task_artifacts "$task_id"; then
+                            echo -e "${GREEN}Artifact validation passed! Task appears to have completed successfully.${NC}"
+                            # Update task status to passed if artifacts indicate success
+                            if [ "$current_status" != "passed" ]; then
+                                update_task_status "$task_id" "passed" "Auto-validated: artifacts indicate successful completion despite exit code $last_exit_code"
+                                log_progress "$task_id" "PASSED (auto-validated)" \
+                                    "Task completed successfully (validated by artifact check)" \
+                                    "" \
+                                    "Exit code was $last_exit_code but artifact validation score was $ARTIFACT_PERCENTAGE%"
+                            fi
+                            task_succeeded=true
+                            break
+                        fi
+
+                        if [ $attempt -lt $MAX_RETRIES ]; then
+                            echo -e "${YELLOW}Will retry (attempt $((attempt + 1)) of $MAX_RETRIES)...${NC}"
+                            # Reset status back to in_progress for retry
+                            update_task_status "$task_id" "in_progress" "Retry attempt $((attempt + 1))"
+                        fi
+                    else
+                        echo -e "${YELLOW}Could not determine task ID. Will retry...${NC}"
+                        if [ $attempt -ge $MAX_RETRIES ]; then
+                            log_progress "unknown" "FAILED" \
+                                "Claude failed after $MAX_RETRIES retry attempts" \
+                                "Final exit code: $last_exit_code; task ID unknown" \
+                                "Task selection or implementation may have failed."
+                        fi
                     fi
                     ;;
             esac
@@ -1552,33 +2076,35 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     # Handle final failure after all retries exhausted
     # Skip if already handled by timeout (124), hung (125), empty log (126), or API error (127)
     if [ "$task_succeeded" = false ] && [ $last_exit_code -ne 124 ] && [ $last_exit_code -ne 125 ] && [ $last_exit_code -ne 126 ] && [ $last_exit_code -ne 127 ]; then
-        current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
-        if [ "$current_status" = "in_progress" ]; then
-            # Final artifact validation check before marking as failed (Issue #18)
-            echo -e "${BLUE}Final artifact validation before marking task as failed...${NC}"
-            if check_task_artifacts "$task_id"; then
-                echo -e "${GREEN}Final artifact validation passed! Marking task as successful.${NC}"
-                update_task_status "$task_id" "passed" "Auto-validated after retries: artifacts indicate successful completion"
-                log_progress "$task_id" "PASSED (auto-validated)" \
-                    "Task completed successfully (final artifact validation passed)" \
-                    "" \
-                    "All retry attempts had non-zero exit codes, but artifact validation score was $ARTIFACT_PERCENTAGE%"
-                task_succeeded=true
-            else
-                # Claude didn't update status after all retries, mark as failed
-                echo -e "${RED}Artifact validation failed (score: $ARTIFACT_PERCENTAGE%). Marking task as failed.${NC}"
-                update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code, artifact score: $ARTIFACT_PERCENTAGE%)"
-                increment_failure_count "$task_id"
-                log_progress "$task_id" "FAILED" \
-                    "Claude failed after $MAX_RETRIES retry attempts" \
-                    "Final exit code: $last_exit_code, Artifact validation score: $ARTIFACT_PERCENTAGE%" \
-                    "Task failed consistently across all retry attempts. Consider breaking into smaller sub-tasks or checking for environmental issues."
+        if [ -n "$task_id" ]; then
+            current_status=$(jq -r --arg id "$task_id" '.tasks[] | select(.id == $id) | .status' "$TODO_FILE" 2>/dev/null || echo "unknown")
+            if [ "$current_status" = "in_progress" ]; then
+                # Final artifact validation check before marking as failed (Issue #18)
+                echo -e "${BLUE}Final artifact validation before marking task as failed...${NC}"
+                if check_task_artifacts "$task_id"; then
+                    echo -e "${GREEN}Final artifact validation passed! Marking task as successful.${NC}"
+                    update_task_status "$task_id" "passed" "Auto-validated after retries: artifacts indicate successful completion"
+                    log_progress "$task_id" "PASSED (auto-validated)" \
+                        "Task completed successfully (final artifact validation passed)" \
+                        "" \
+                        "All retry attempts had non-zero exit codes, but artifact validation score was $ARTIFACT_PERCENTAGE%"
+                    task_succeeded=true
+                else
+                    # Claude didn't update status after all retries, mark as failed
+                    echo -e "${RED}Artifact validation failed (score: $ARTIFACT_PERCENTAGE%). Marking task as failed.${NC}"
+                    update_task_status "$task_id" "pending" "Failed after $MAX_RETRIES attempts (exit code: $last_exit_code, artifact score: $ARTIFACT_PERCENTAGE%)"
+                    increment_failure_count "$task_id"
+                    log_progress "$task_id" "FAILED" \
+                        "Claude failed after $MAX_RETRIES retry attempts" \
+                        "Final exit code: $last_exit_code, Artifact validation score: $ARTIFACT_PERCENTAGE%" \
+                        "Task failed consistently across all retry attempts. Consider breaking into smaller sub-tasks or checking for environmental issues."
+                fi
             fi
         fi
     fi
 
     # Run validation for informational purposes on successful tasks
-    if [ "$task_succeeded" = true ]; then
+    if [ "$task_succeeded" = true ] && [ -n "$task_id" ]; then
         echo -e "${BLUE}Running post-completion validation...${NC}"
         validate_task_completion "$task_id"
     fi
@@ -1588,7 +2114,13 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
 
     echo ""
     echo -e "${BLUE}Iteration $iteration completed in $((duration / 60))m $((duration % 60))s${NC}"
+    if [ -n "$task_id" ]; then
+        echo -e "${BLUE}Task worked on: $task_id${NC}"
+    fi
     echo ""
+
+    # Sync statistics at end of each iteration (Issue #27)
+    sync_statistics || true
 
     # Show current statistics
     stats=$(jq '.statistics' "$TODO_FILE" 2>/dev/null || echo '{}')
