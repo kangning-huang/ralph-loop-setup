@@ -26,7 +26,7 @@ LOCK_FILE=""  # Will be set after TODO_FILE is determined
 
 # Health Check Configuration (Issue #22, updated by Issue #28)
 HEALTH_CHECK_INTERVAL=30  # Check log file activity every 30 seconds
-HEALTH_CHECK_INACTIVITY_TIMEOUT=900  # 15 minutes of inactivity before killing hung process (Issue #28: increased from 5 min)
+HEALTH_CHECK_INACTIVITY_TIMEOUT=1800  # 30 minutes of inactivity before killing hung process (Issue #42: increased from 15 min for research tasks)
 HEALTH_CHECK_ENABLED=true  # Enable/disable health check monitoring
 
 # Colors for output
@@ -64,7 +64,7 @@ usage() {
     echo "  --health-check-interval SECS"
     echo "                        Health check interval in seconds (default: 30)"
     echo "  --health-check-timeout SECS"
-    echo "                        Inactivity timeout before killing hung process (default: 900)"
+    echo "                        Inactivity timeout before killing hung process (default: 1800)"
     echo "  --no-health-check     Disable health check monitoring"
     echo "  --validate            Validate todolist.json and exit (Issue #30)"
     echo "  --validate --fix      Validate and auto-fix issues where possible"
