@@ -1252,16 +1252,41 @@ $todo_list_content
 $recent_progress
 \`\`\`
 
+## ADAPTIVE FILE SEARCHING (Issue #39)
+
+**CRITICAL**: File paths in the todo list may become outdated after reorganization. NEVER fail immediately if a file doesn't exist at the expected path. Instead:
+
+1. **Read CLAUDE.md first** - Check if a CLAUDE.md file exists in the working directory. It often contains file organization documentation that explains where files are located.
+
+2. **Use Glob for pattern matching** - If a file path doesn't exist, use the Glob tool to search for the file:
+   - Search by filename: \`*.py\`, \`**/config.json\`, \`**/*test*.js\`
+   - Search in likely directories: \`src/**/*.ts\`, \`lib/**/*.py\`
+   - Try partial matches: \`**/*filename*\`
+
+3. **Use Grep for content search** - If you know what content a file should contain but can't find it:
+   - Search for unique strings, function names, or class definitions
+   - Example: Search for \`class MyComponent\` or \`def process_data\`
+
+4. **Check common reorganization patterns**:
+   - Files may have moved to \`src/\`, \`lib/\`, \`app/\`, or \`core/\` directories
+   - Test files may be in \`tests/\`, \`__tests__/\`, \`spec/\`, or alongside source files
+   - Config files may be in root, \`config/\`, or \`.config/\`
+
+5. **Update the todo list with correct paths** - If you find a file at a different location, update the task description with the correct path to help future iterations.
+
+**Remember**: Adaptive searching is ALWAYS better than failing. Only mark a task as failed if you've exhausted all search options and the required file truly doesn't exist.
+
 ## IMPLEMENTATION INSTRUCTIONS
 
 Once you've selected your task:
 
 1. **Announce your selection** - State which task ID you chose and WHY (1-2 sentences explaining your reasoning)
-2. **Read the relevant source files first** to understand the current implementation
-3. **Plan your implementation** before writing code
-4. **Implement the task** following the existing code patterns and architecture
-${build_command:+5. **Verify the build compiles** by running: \`$build_command\`}
-${test_command:+6. **Run tests** if applicable: \`$test_command\`}
+2. **Check file paths and find files** - Before implementing, verify all referenced files exist. Use Glob/Grep to locate files if paths are outdated.
+3. **Read the relevant source files first** to understand the current implementation
+4. **Plan your implementation** before writing code
+5. **Implement the task** following the existing code patterns and architecture
+${build_command:+6. **Verify the build compiles** by running: \`$build_command\`}
+${test_command:+7. **Run tests** if applicable: \`$test_command\`}
 ${extra_instructions:+
 ### Project-Specific Instructions
 
@@ -1320,7 +1345,8 @@ Include in the commit message:
 5. **Keep changes minimal** - Only change what's necessary
 6. **Update the todo list and progress.txt** - This is CRITICAL
 7. **NO FOLLOW-UP QUESTIONS** - This is automated. Complete the task and exit.
-${build_command:+8. **Build must compile** - Verify with \`$build_command\`}
+8. **SEARCH before failing** - If a file path doesn't exist, use Glob/Grep to find it. Never fail without trying to locate files first.
+${build_command:+9. **Build must compile** - Verify with \`$build_command\`}
 
 ## Reference Files
 

@@ -331,6 +331,8 @@ When creating tasks, advise users to:
 3. **Define Dependencies**: Ensure foundation tasks come before dependent ones
 4. **Write Clear Acceptance Criteria**: How will Claude know when it's done?
 5. **Hint at Files**: The `files_likely_affected` field helps Claude focus
+6. **Keep CLAUDE.md Updated**: Document your project's file organization in CLAUDE.md so Claude can find files even after reorganization
+7. **Don't Worry About Outdated Paths**: The loop now uses adaptive file searching - if paths in tasks become outdated after reorganization, Claude will use Glob/Grep to locate the correct files
 
 ## Important Notes
 
