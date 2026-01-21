@@ -205,6 +205,18 @@ Select **EXACTLY ONE** task. Use AI judgment to consider:
 
 **Eligibility**: Task must be "pending", failure_count < $MAX_FAILURES, all dependencies "passed"
 
+## ADAPTIVE FILE SEARCHING (Issue #39)
+
+**CRITICAL**: File paths in tasks may become outdated after reorganization. NEVER fail immediately if a file doesn't exist. Instead:
+
+1. **Read CLAUDE.md first** - Check for file organization documentation
+2. **Use Glob** for pattern matching: \`*.py\`, \`**/*config*\`, \`src/**/*.ts\`
+3. **Use Grep** to search for content (function names, class definitions)
+4. **Check common patterns**: \`src/\`, \`lib/\`, \`app/\`, \`tests/\`, \`__tests__/\`
+5. **Update todo list** with correct paths when you find files elsewhere
+
+**Remember**: Adaptive searching is ALWAYS better than failing.
+
 ## THE TODO LIST
 
 \`\`\`json
@@ -220,10 +232,11 @@ $recent_progress
 ## Instructions
 
 1. **Announce your selection** - State which task ID and WHY (1-2 sentences)
-2. Read relevant files first
-3. Implement the task
-${build_cmd:+4. Verify build: \`$build_cmd\`}
-${test_cmd:+5. Run tests: \`$test_cmd\`}
+2. **Verify file paths exist** - Use Glob/Grep to locate files if paths are outdated
+3. Read relevant files first
+4. Implement the task
+${build_cmd:+5. Verify build: \`$build_cmd\`}
+${test_cmd:+6. Run tests: \`$test_cmd\`}
 
 ## After Implementation
 
