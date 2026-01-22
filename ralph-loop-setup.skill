@@ -98,9 +98,9 @@ usage() {
 
 while [[ $# -gt 0 ]]; do
     case $1 in
-        -m) MAX_ITERATIONS="$2"; shift 2 ;;
-        -w) WORKING_DIR="$2"; shift 2 ;;
-        -t) TIMEOUT_SECONDS="$2"; shift 2 ;;
+        -m) [[ -z "${2:-}" ]] && { echo "Error: -m requires a value"; exit 1; }; MAX_ITERATIONS="$2"; shift 2 ;;
+        -w) [[ -z "${2:-}" ]] && { echo "Error: -w requires a value"; exit 1; }; WORKING_DIR="$2"; shift 2 ;;
+        -t) [[ -z "${2:-}" ]] && { echo "Error: -t requires a value"; exit 1; }; TIMEOUT_SECONDS="$2"; shift 2 ;;
         -h) usage ;;
         -*) echo "Unknown option: $1"; exit 1 ;;
         *) TODO_FILE="$1"; shift ;;

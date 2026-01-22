@@ -82,11 +82,11 @@ usage() {
 while [[ $# -gt 0 ]]; do
     case $1 in
         --max-iterations|-m)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --max-iterations requires a numeric value${NC}"
                 exit 1
             fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            if ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 echo -e "${RED}Error: --max-iterations must be a positive integer${NC}"
                 exit 1
             fi
@@ -94,7 +94,7 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --working-dir|-w)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --working-dir requires a directory path${NC}"
                 exit 1
             fi
@@ -102,11 +102,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --timeout|-t)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --timeout requires a numeric value${NC}"
                 exit 1
             fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            if ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 echo -e "${RED}Error: --timeout must be a positive integer${NC}"
                 exit 1
             fi
@@ -114,11 +114,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --max-retries|-r)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --max-retries requires a numeric value${NC}"
                 exit 1
             fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            if ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 echo -e "${RED}Error: --max-retries must be a positive integer${NC}"
                 exit 1
             fi
@@ -126,11 +126,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --retry-delay)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --retry-delay requires a numeric value${NC}"
                 exit 1
             fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            if ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 echo -e "${RED}Error: --retry-delay must be a positive integer${NC}"
                 exit 1
             fi
@@ -142,11 +142,11 @@ while [[ $# -gt 0 ]]; do
             shift
             ;;
         --health-check-interval)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --health-check-interval requires a numeric value${NC}"
                 exit 1
             fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            if ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 echo -e "${RED}Error: --health-check-interval must be a positive integer${NC}"
                 exit 1
             fi
@@ -154,11 +154,11 @@ while [[ $# -gt 0 ]]; do
             shift 2
             ;;
         --health-check-timeout)
-            if [[ -z "$2" || "$2" == -* ]]; then
+            if [[ -z "${2:-}" || "${2:-}" == -* ]]; then
                 echo -e "${RED}Error: --health-check-timeout requires a numeric value${NC}"
                 exit 1
             fi
-            if ! [[ "$2" =~ ^[0-9]+$ ]]; then
+            if ! [[ "${2:-}" =~ ^[0-9]+$ ]]; then
                 echo -e "${RED}Error: --health-check-timeout must be a positive integer${NC}"
                 exit 1
             fi
