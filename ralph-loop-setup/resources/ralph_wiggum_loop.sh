@@ -113,13 +113,14 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
         -e "s|PROGRESSFILE_PLACEHOLDER|$PROGRESS_FILE|g" \
         -e "s|WORKINGDIR_PLACEHOLDER|$WORKING_DIR|g")
 
-    # Run Claude
+    # Run Claude in the working directory
     log_file="${LOG_DIR}/iteration_${iteration}_$(date +%Y%m%d_%H%M%S).log"
 
     echo "Running Claude..."
     echo ""
 
-    if claude --dangerously-skip-permissions -p "$prompt" > "$log_file" 2>&1; then
+    cd "$WORKING_DIR"
+    if echo "$prompt" | claude --dangerously-skip-permissions --print > "$log_file" 2>&1; then
         echo -e "${GREEN}Iteration $iteration completed${NC}"
     else
         exit_code=$?
