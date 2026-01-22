@@ -302,33 +302,19 @@ Only run this in project directories you trust.
 
 To run the Ralph Wiggum Loop:
 
-   ./ralph_wiggum_loop.sh
+   ./ralph_wiggum_loop.sh [max_iterations] [todo_file]
 
-(The script automatically finds todolist.json in the same directory)
-
-Options:
-   -m, --max-iterations N     Maximum iterations (default: unlimited)
-   -w, --working-dir DIR      Working directory (default: todo file directory)
-   -t, --timeout SEC          Timeout per task in seconds (default: 1800)
-   -r, --max-retries N        Max retry attempts per task (default: 3)
-   --retry-delay SEC          Delay between retries (default: 5)
-   --exponential-backoff      Use exponential backoff for retries
-   --health-check-interval SEC  Health check interval (default: 30)
-   --health-check-timeout SEC   Inactivity timeout (default: 900)
-   --no-health-check          Disable health check monitoring
-   --validate                 Validate todolist.json and exit
-   --validate --fix           Validate and auto-fix issues
-
-Example - run 5 tasks then stop:
-   ./ralph_wiggum_loop.sh -m 5
+Examples:
+   ./ralph_wiggum_loop.sh              # Run until all tasks done
+   ./ralph_wiggum_loop.sh 10           # Run at most 10 iterations
+   ./ralph_wiggum_loop.sh 5 ./my.json  # 5 iterations with custom todo file
 
 The loop will:
-- Let Claude intelligently select the best task (not just by priority number)
-- Consider: strategic impact, dependencies, failure history, complexity
-- Run a fresh Claude session to implement the selected task (with automated permissions)
-- Update todolist.json and progress.txt
-- Move to the next iteration
-- Retry failed tasks up to 5 times
+- Claude reads the todo list each iteration
+- AI selects the best pending task (considering priority, dependencies, impact)
+- Implements the task completely
+- Updates todolist.json status and logs to progress.txt
+- Repeats until all tasks completed
 ```
 
 ## Best Practices to Share with Users
