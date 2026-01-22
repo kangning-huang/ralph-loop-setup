@@ -180,7 +180,7 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo "Running Claude..."
     echo ""
 
-    if claude --dangerously-skip-permissions -p "$prompt" > "$log_file" 2>&1; then
+    if claude --dangerously-skip-permissions --print "$prompt" > "$log_file" 2>&1; then
         echo -e "${GREEN}Iteration $iteration completed${NC}"
     else
         exit_code=$?
