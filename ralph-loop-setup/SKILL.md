@@ -307,8 +307,17 @@ To run the Ralph Wiggum Loop:
 (The script automatically finds todolist.json in the same directory)
 
 Options:
-   -m N    Maximum iterations (default: unlimited)
-   -t SEC  Timeout per task in seconds (default: 1800)
+   -m, --max-iterations N     Maximum iterations (default: unlimited)
+   -w, --working-dir DIR      Working directory (default: todo file directory)
+   -t, --timeout SEC          Timeout per task in seconds (default: 1800)
+   -r, --max-retries N        Max retry attempts per task (default: 3)
+   --retry-delay SEC          Delay between retries (default: 5)
+   --exponential-backoff      Use exponential backoff for retries
+   --health-check-interval SEC  Health check interval (default: 30)
+   --health-check-timeout SEC   Inactivity timeout (default: 900)
+   --no-health-check          Disable health check monitoring
+   --validate                 Validate todolist.json and exit
+   --validate --fix           Validate and auto-fix issues
 
 Example - run 5 tasks then stop:
    ./ralph_wiggum_loop.sh -m 5
