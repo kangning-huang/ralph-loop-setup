@@ -5,7 +5,7 @@ description: Set up or update automated task implementation system with Ralph Wi
 
 # Ralph Loop Setup Skill
 
-You are helping the user set up or update the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses Claude Code to intelligently work through a project todo list.
+You are helping the user set up or update the 3 files needed to run a Ralph Wiggum Loop - an automated task implementation system that uses an AI coding assistant (Claude Code or Codex) to intelligently work through a project todo list. The script auto-detects which CLI is available at runtime.
 
 **Key Feature**: Rather than strictly following priority order, Claude analyzes the full todo list and uses AI judgment to select the most impactful task based on strategic value, dependencies, likelihood of success, and logical ordering.
 
