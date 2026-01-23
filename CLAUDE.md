@@ -2,6 +2,27 @@
 
 ## Important Reminders
 
+### macOS Compatibility - NO `timeout` Command
+
+**CRITICAL**: The `timeout` command does NOT exist on macOS. Never use it in shell scripts.
+
+**Alternatives:**
+- Use `gtimeout` from coreutils (requires `brew install coreutils`)
+- Use a background process with `sleep` and `kill`
+- Use Perl: `perl -e 'alarm 30; exec @ARGV' "command"`
+
+**Example cross-platform pattern:**
+```bash
+if command -v timeout &>/dev/null; then
+    timeout 30 some_command
+elif command -v gtimeout &>/dev/null; then
+    gtimeout 30 some_command
+else
+    # Fallback without timeout
+    some_command
+fi
+```
+
 ### Keep Skill Files in Sync
 
 **CRITICAL**: Whenever you modify `ralph_wiggum_loop.sh`, you MUST also update ALL skill files to reflect the same changes.
