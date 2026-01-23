@@ -15,6 +15,12 @@ MAX_ITERATIONS=${1:-999999}
 TODO_FILE="${2:-${SCRIPT_DIR}/todolist.json}"
 LOG_DIR="${SCRIPT_DIR}/logs"
 
+# Crash resilience configuration
+MAX_RETRIES=3               # Retry each iteration up to 3 times on crash
+MAX_CONSECUTIVE_FAILURES=3  # Stop loop after 3 consecutive failures
+RETRY_DELAY=30              # Wait 30 seconds between retries
+consecutive_failures=0      # Track consecutive failures across iterations
+
 # Resolve paths
 TODO_FILE="$(cd "$(dirname "$TODO_FILE")" 2>/dev/null && pwd)/$(basename "$TODO_FILE")"
 WORKING_DIR="$(dirname "$TODO_FILE")"
@@ -86,6 +92,16 @@ Start now: Read the todo list, pick a task, implement it, update the files.
 EOF
 }
 
+# Check if Claude crashed (vs intentional exit)
+check_for_crash() {
+    local log_file=$1
+    # Look for common crash patterns in the log
+    if grep -q "Error: No messages returned\|promise rejected\|async function without a catch\|ECONNREFUSED\|timeout" "$log_file" 2>/dev/null; then
+        return 0  # Crash detected
+    fi
+    return 1  # No crash - Claude exited normally
+}
+
 # Main loop
 iteration=0
 
@@ -113,25 +129,79 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
         -e "s|PROGRESSFILE_PLACEHOLDER|$PROGRESS_FILE|g" \
         -e "s|WORKINGDIR_PLACEHOLDER|$WORKING_DIR|g")
 
-    # Run Claude in the working directory
+    # Run Claude with retry logic
     log_file="${LOG_DIR}/iteration_${iteration}_$(date +%Y%m%d_%H%M%S).log"
+    retry_count=0
+    iteration_success=false
 
     echo "Running Claude..."
     echo ""
 
     cd "$WORKING_DIR"
-    if echo "$prompt" | claude --dangerously-skip-permissions --print > "$log_file" 2>&1; then
-        echo -e "${GREEN}Iteration $iteration completed${NC}"
+
+    # Retry loop for this iteration
+    while [ $retry_count -lt $MAX_RETRIES ]; do
+        if echo "$prompt" | claude --dangerously-skip-permissions --print > "$log_file" 2>&1; then
+            # Success!
+            echo -e "${GREEN}Iteration $iteration completed${NC}"
+            iteration_success=true
+            consecutive_failures=0
+            break
+        else
+            exit_code=$?
+            echo -e "${YELLOW}Claude exited with code $exit_code${NC}"
+
+            # Check if it's a crash or intentional exit
+            if check_for_crash "$log_file"; then
+                # It's a crash - retry
+                retry_count=$((retry_count + 1))
+                if [ $retry_count -lt $MAX_RETRIES ]; then
+                    echo -e "${RED}Claude crashed. Retrying in ${RETRY_DELAY}s... (attempt $((retry_count + 1))/${MAX_RETRIES})${NC}"
+                    sleep $RETRY_DELAY
+                    # Update log filename for retry
+                    log_file="${LOG_DIR}/iteration_${iteration}_retry${retry_count}_$(date +%Y%m%d_%H%M%S).log"
+                else
+                    echo -e "${RED}All ${MAX_RETRIES} retry attempts failed${NC}"
+                fi
+            else
+                # Not a crash - Claude intentionally exited (maybe task failed)
+                # This is okay - Claude updated the status already
+                echo -e "${YELLOW}Claude exited intentionally (task may have failed)${NC}"
+                iteration_success=true
+                consecutive_failures=0
+                break
+            fi
+        fi
+    done
+
+    # Check if all retries failed
+    if [ "$iteration_success" = false ]; then
+        consecutive_failures=$((consecutive_failures + 1))
+        echo -e "${RED}Iteration $iteration failed after $MAX_RETRIES attempts${NC}"
+        echo -e "${RED}Consecutive failures: ${consecutive_failures}/${MAX_CONSECUTIVE_FAILURES}${NC}"
+
+        if [ $consecutive_failures -ge $MAX_CONSECUTIVE_FAILURES ]; then
+            echo ""
+            echo -e "${RED}╔════════════════════════════════════════════════════════════════╗${NC}"
+            echo -e "${RED}║  Too many consecutive failures (${consecutive_failures}). Stopping loop.        ║${NC}"
+            echo -e "${RED}║  Check logs for errors and retry manually.                    ║${NC}"
+            echo -e "${RED}╚════════════════════════════════════════════════════════════════╝${NC}"
+            exit 1
+        fi
+
+        # Wait before next iteration after failure
+        echo -e "${YELLOW}Waiting ${RETRY_DELAY}s before next iteration...${NC}"
+        sleep $RETRY_DELAY
     else
-        exit_code=$?
-        echo -e "${YELLOW}Claude exited with code $exit_code${NC}"
+        # Brief pause between successful iterations
+        sleep 2
     fi
 
     echo "Log: $log_file"
     echo ""
-
-    # Brief pause between iterations
-    sleep 2
 done
 
-echo -e "${GREEN}Ralph Wiggum Loop finished after $iteration iterations${NC}"
+echo ""
+echo -e "${GREEN}╔════════════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║  Ralph Wiggum Loop finished after $iteration iterations       ║${NC}"
+echo -e "${GREEN}╚════════════════════════════════════════════════════════════════╝${NC}"
