@@ -206,7 +206,8 @@ Create the orchestration script. You can find the full script content in the ref
 - Reads tasks from todolist.json
 - Runs Claude Code for each task
 - Updates progress.txt after each task
-- Handles timeouts and retries
+- Crash resilience: automatic retries with backoff on Claude crashes
+- Consecutive failure tracking: stops after 3 consecutive failures to prevent infinite loops
 
 #### File 2: Create todolist.json
 
@@ -314,7 +315,14 @@ The loop will:
 - AI selects the best pending task (considering priority, dependencies, impact)
 - Implements the task completely
 - Updates todolist.json status and logs to progress.txt
+- Automatically retries if Claude crashes (up to 3 attempts per iteration)
+- Stops safely after 3 consecutive failures to prevent infinite loops
 - Repeats until all tasks completed
+
+Crash Resilience Configuration (defaults in script):
+- MAX_RETRIES=3 (retry attempts per iteration)
+- RETRY_DELAY=30 (seconds between retries)
+- MAX_CONSECUTIVE_FAILURES=3 (loop stops after this many consecutive failures)
 ```
 
 ## Best Practices to Share with Users
