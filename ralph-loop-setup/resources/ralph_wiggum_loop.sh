@@ -3,8 +3,8 @@
 # Ralph Wiggum Loop - Automated Task Implementation
 # "I'm helping!" - Ralph Wiggum
 #
-# A simple loop that runs Claude Code to work through tasks.
-# Claude AI handles all the intelligence: task selection, implementation,
+# A simple loop that runs an AI coding assistant (claude or codex) to work through tasks.
+# The AI handles all the intelligence: task selection, implementation,
 # logging, and status updates.
 
 set -u
@@ -38,11 +38,39 @@ echo "Working dir: $WORKING_DIR"
 echo "Max iterations: $MAX_ITERATIONS"
 echo ""
 
-# Check dependencies
-if ! command -v claude &> /dev/null; then
-    echo -e "${RED}Error: 'claude' CLI not found${NC}"
+# Detect AI CLI platform (codex or claude)
+detect_ai_cli() {
+    if command -v codex &> /dev/null; then
+        echo "codex"
+    elif command -v claude &> /dev/null; then
+        echo "claude"
+    else
+        echo ""
+    fi
+}
+
+AI_CLI=$(detect_ai_cli)
+
+if [ -z "$AI_CLI" ]; then
+    echo -e "${RED}Error: No AI CLI found. Install 'claude' or 'codex' CLI.${NC}"
     exit 1
 fi
+
+echo "Using AI CLI: $AI_CLI"
+
+# Build the appropriate command based on detected CLI
+run_ai_command() {
+    local prompt="$1"
+    local log_file="$2"
+
+    if [ "$AI_CLI" = "codex" ]; then
+        # Codex uses 'exec' subcommand with --full-auto and '-' for stdin
+        echo "$prompt" | codex exec --full-auto - > "$log_file" 2>&1
+    else
+        # Claude Code uses --dangerously-skip-permissions and --print
+        echo "$prompt" | claude --dangerously-skip-permissions --print > "$log_file" 2>&1
+    fi
+}
 
 if [ ! -f "$TODO_FILE" ]; then
     echo -e "${RED}Error: Todo file not found: $TODO_FILE${NC}"
@@ -113,18 +141,18 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
         -e "s|PROGRESSFILE_PLACEHOLDER|$PROGRESS_FILE|g" \
         -e "s|WORKINGDIR_PLACEHOLDER|$WORKING_DIR|g")
 
-    # Run Claude in the working directory
+    # Run AI CLI in the working directory
     log_file="${LOG_DIR}/iteration_${iteration}_$(date +%Y%m%d_%H%M%S).log"
 
-    echo "Running Claude..."
+    echo "Running $AI_CLI..."
     echo ""
 
     cd "$WORKING_DIR"
-    if echo "$prompt" | claude --dangerously-skip-permissions --print > "$log_file" 2>&1; then
+    if run_ai_command "$prompt" "$log_file"; then
         echo -e "${GREEN}Iteration $iteration completed${NC}"
     else
         exit_code=$?
-        echo -e "${YELLOW}Claude exited with code $exit_code${NC}"
+        echo -e "${YELLOW}$AI_CLI exited with code $exit_code${NC}"
     fi
 
     echo "Log: $log_file"
