@@ -99,12 +99,12 @@ echo "Working dir: $WORKING_DIR"
 echo "Max iterations: $MAX_ITERATIONS"
 echo ""
 
-# Detect AI CLI platform (codex or claude)
+# Detect AI CLI platform (prefer claude over codex)
 detect_ai_cli() {
-    if command -v codex &> /dev/null; then
-        echo "codex"
-    elif command -v claude &> /dev/null; then
+    if command -v claude &> /dev/null; then
         echo "claude"
+    elif command -v codex &> /dev/null; then
+        echo "codex"
     else
         echo ""
     fi
