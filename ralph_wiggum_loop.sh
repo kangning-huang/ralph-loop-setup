@@ -103,6 +103,7 @@ You are an AI assistant working through a project todo list.
 - Update both todolist.json and progress.txt before finishing
 - If a task fails, mark it "failed" with notes explaining why
 - If no eligible tasks remain, just report that and exit
+- **CRITICAL: Make tool calls SEQUENTIALLY, one at a time. Do NOT make parallel tool calls.** This is required for stdin pipe mode compatibility.
 
 ## Files
 
