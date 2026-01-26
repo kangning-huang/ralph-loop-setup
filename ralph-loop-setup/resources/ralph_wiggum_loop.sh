@@ -77,42 +77,34 @@ if [ ! -f "$TODO_FILE" ]; then
     exit 1
 fi
 
-# The prompt - this is where all the magic happens
+# The prompt - injects todo content directly to avoid parallel read calls
 create_prompt() {
-    cat << 'EOF'
-**IMPORTANT: You are running in stdin pipe mode. You MUST make all tool calls SEQUENTIALLY, one at a time. NEVER make parallel/concurrent tool calls or you will get "API Error: 400 due to tool use concurrency issues."**
+    local todo_content="$1"
+    cat << EOF
+STDIN PIPE MODE - MAKE ONLY ONE TOOL CALL AT A TIME. WAIT FOR EACH TO COMPLETE.
 
-You are an AI assistant working through a project todo list.
+## Current Todo List (already read for you):
+\`\`\`json
+${todo_content}
+\`\`\`
 
 ## Your Task
 
-1. **Read todolist.json** to see all tasks and their statuses
-2. **Choose ONE task** that is:
-   - Status is "pending" (not completed, failed, or in_progress)
-   - Dependencies are satisfied (all tasks in "dependencies" array have status "passed")
-   - Choose wisely based on priority, impact, and likelihood of success
-3. **Implement the task** completely
-4. **Update todolist.json** - set the task's status to "passed" or "failed"
-5. **Append to progress.txt** with:
-   - Timestamp and task ID
-   - What you did
-   - Any lessons learned for future iterations
+1. From the todo list above, choose ONE task where:
+   - Status is "pending"
+   - All dependencies (if any) have status "passed"
+2. Implement the task completely
+3. Update TODOFILE_PLACEHOLDER - set status to "passed" or "failed"
+4. Append to PROGRESSFILE_PLACEHOLDER with timestamp, task ID, and what you did
 
-## Important Rules
+## Rules
 
+- ONE tool call at a time - wait for each to complete before the next
 - Focus on ONE task only
-- This is automated - no questions, just do the work
-- Update both todolist.json and progress.txt before finishing
-- If a task fails, mark it "failed" with notes explaining why
-- If no eligible tasks remain, just report that and exit
-
-## Files
-
-- Todo list: TODOFILE_PLACEHOLDER
-- Progress log: PROGRESSFILE_PLACEHOLDER
+- If no eligible pending tasks, just report that and exit
 - Working directory: WORKINGDIR_PLACEHOLDER
 
-Start now: Read the todo list, pick a task, implement it, update the files.
+Start: Pick a task from above and implement it.
 EOF
 }
 
@@ -137,8 +129,9 @@ while [ $iteration -lt $MAX_ITERATIONS ]; do
     echo "Pending tasks: $pending_count"
     echo ""
 
-    # Create prompt with actual paths
-    prompt=$(create_prompt | sed \
+    # Read todo content and inject into prompt (avoids parallel read calls)
+    todo_content=$(cat "$TODO_FILE")
+    prompt=$(create_prompt "$todo_content" | sed \
         -e "s|TODOFILE_PLACEHOLDER|$TODO_FILE|g" \
         -e "s|PROGRESSFILE_PLACEHOLDER|$PROGRESS_FILE|g" \
         -e "s|WORKINGDIR_PLACEHOLDER|$WORKING_DIR|g")
